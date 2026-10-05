@@ -1,12 +1,25 @@
-"""NLP tests (Phase E): tokenizer, text prep, load rules, mocked inference."""
+"""NLP tests (Phase E): tokenizer, text prep, load rules, mocked inference.
+
+The official-artifact loading rules are exercised here with stub files and
+a fake ``transformers`` module; tests against the REAL fine-tuned artifact
+live in ``test_nlp_real_artifact.py`` (skipped when the artifact is absent).
+"""
 
 from __future__ import annotations
+
+import json
+import sys
+import types
 
 import pytest
 
 from app.ai.nlp.model import (
     DEFAULT_CLASS_LABELS,
-    FORENTISAI_NLP_MARKER,
+    FORENTISAI_ID2LABEL,
+    FORENTISAI_MANIFEST_FILENAME as FORENTISAI_MANIFEST_FILENAME_PLACEHOLDER,
+    FORENTISAI_MODEL_FLAG,
+    FORENTISAI_MODEL_TYPE,
+    NLPModelBundle,
     NLPModelLoadError,
     load_nlp_model,
 )
@@ -68,49 +81,155 @@ def test_prepare_model_text_empty_body():
 # ---------------------------------------------------------------------------
 
 
+def _default_config() -> dict:
+    """config.json with the mandatory raw class contract 0=benign, 1=malicious."""
+
+    return {
+        "model_type": "deberta-v2",
+        "architectures": ["DebertaV2ForSequenceClassification"],
+        "id2label": {"0": "benign", "1": "malicious"},
+    }
+
+
+def _make_artifact(
+    tmp_path,
+    *,
+    config: dict | None = None,
+    manifest: dict | None = None,
+    omit: tuple[str, ...] = (),
+) -> object:
+    """Build a stub artifact directory with the required file skeleton."""
+
+    model_dir = tmp_path / "forentisai_deberta_v3"
+    model_dir.mkdir(exist_ok=True)
+    files: dict[str, str] = {
+        "config.json": json.dumps(config if config is not None else _default_config()),
+        "model.safetensors": "stub-weights",
+        "tokenizer.json": "{}",
+        "tokenizer_config.json": "{}",
+        FORENTISAI_MANIFEST_FILENAME_PLACEHOLDER: json.dumps(
+            manifest
+            if manifest is not None
+            else {FORENTISAI_MODEL_FLAG: True, "model_type": FORENTISAI_MODEL_TYPE}
+        ),
+    }
+    for filename, content in files.items():
+        if filename in omit:
+            continue
+        (model_dir / filename).write_text(content, encoding="utf-8")
+    return model_dir
+
+
 def test_load_missing_nlp_model(tmp_path):
     with pytest.raises(NLPModelLoadError) as excinfo:
         load_nlp_model(tmp_path / "missing")
     assert excinfo.value.reason == "model_not_found"
 
 
-def test_load_base_unmarked_model_is_refused(tmp_path):
-    """An artifact WITHOUT the ForentisAI marker must never be used."""
+def test_load_directory_missing_safetensors_is_refused(tmp_path):
+    model_dir = _make_artifact(tmp_path, omit=("model.safetensors",))
+    with pytest.raises(NLPModelLoadError) as excinfo:
+        load_nlp_model(model_dir)
+    assert excinfo.value.reason == "model_not_found"
 
-    model_dir = tmp_path / "base_model"
-    model_dir.mkdir()
-    (model_dir / "config.json").write_text(
-        '{"model_type": "deberta-v2", "id2label": {"0": "benign", "1": "suspicious"}}',
-        encoding="utf-8",
+
+def test_load_directory_missing_tokenizer_is_refused(tmp_path):
+    model_dir = _make_artifact(tmp_path, omit=("tokenizer.json",))
+    with pytest.raises(NLPModelLoadError) as excinfo:
+        load_nlp_model(model_dir)
+    assert excinfo.value.reason == "model_not_found"
+
+
+def test_load_directory_without_manifest_is_refused(tmp_path):
+    """An artifact WITHOUT forentisai_model.json must never be used."""
+
+    model_dir = _make_artifact(tmp_path, omit=(FORENTISAI_MANIFEST_FILENAME_PLACEHOLDER,))
+    with pytest.raises(NLPModelLoadError) as excinfo:
+        load_nlp_model(model_dir)
+    assert excinfo.value.reason == "model_not_trained"
+
+
+def test_load_base_unmarked_model_is_refused(tmp_path):
+    """A foreign 2-class model WITH weights but NO manifest must never be used."""
+
+    model_dir = _make_artifact(
+        tmp_path,
+        config={"model_type": "deberta-v2", "id2label": {"0": "benign", "1": "suspicious"}},
+        omit=(FORENTISAI_MANIFEST_FILENAME_PLACEHOLDER,),
     )
     with pytest.raises(NLPModelLoadError) as excinfo:
         load_nlp_model(model_dir)
     assert excinfo.value.reason == "model_not_trained"
 
 
-def test_load_wrong_marker_is_refused(tmp_path):
-    model_dir = tmp_path / "foreign_model"
-    model_dir.mkdir()
-    (model_dir / "config.json").write_text(
-        '{"_forentisai_finetune_marker": "some_other_project_v9"}',
-        encoding="utf-8",
+def test_load_old_style_marker_without_manifest_is_refused(tmp_path):
+    """The pre-artifact config marker alone is NOT the official format."""
+
+    model_dir = _make_artifact(
+        tmp_path,
+        config={**_default_config(), "_forentisai_finetune_marker": "forentisai_nlp_finetuned_v1"},
+        omit=(FORENTISAI_MANIFEST_FILENAME_PLACEHOLDER,),
+    )
+    with pytest.raises(NLPModelLoadError) as excinfo:
+        load_nlp_model(model_dir)
+    assert excinfo.value.reason == "model_not_trained"
+
+
+def test_load_manifest_flag_false_is_rejected(tmp_path):
+    model_dir = _make_artifact(
+        tmp_path, manifest={FORENTISAI_MODEL_FLAG: False, "model_type": FORENTISAI_MODEL_TYPE}
     )
     with pytest.raises(NLPModelLoadError) as excinfo:
         load_nlp_model(model_dir)
     assert excinfo.value.reason == "incompatible_model"
 
 
-def test_load_marker_with_wrong_labels_is_refused(tmp_path):
-    model_dir = tmp_path / "wrong_labels"
-    model_dir.mkdir()
-    (model_dir / "config.json").write_text(
-        '{"_forentisai_finetune_marker": "%s", "id2label": {"0": "ham", "1": "spam"}}'
-        % FORENTISAI_NLP_MARKER,
-        encoding="utf-8",
+def test_load_manifest_wrong_model_type_is_rejected(tmp_path):
+    model_dir = _make_artifact(
+        tmp_path, manifest={FORENTISAI_MODEL_FLAG: True, "model_type": "some_other_project_v9"}
     )
     with pytest.raises(NLPModelLoadError) as excinfo:
         load_nlp_model(model_dir)
     assert excinfo.value.reason == "incompatible_model"
+
+
+def test_load_manifest_missing_flag_is_rejected(tmp_path):
+    model_dir = _make_artifact(tmp_path, manifest={"model_type": FORENTISAI_MODEL_TYPE})
+    with pytest.raises(NLPModelLoadError) as excinfo:
+        load_nlp_model(model_dir)
+    assert excinfo.value.reason == "incompatible_model"
+
+
+def test_load_wrong_id2label_is_rejected(tmp_path):
+    """The raw contract MUST be 0=benign, 1=malicious (config.json)."""
+
+    model_dir = _make_artifact(
+        tmp_path, config={**_default_config(), "id2label": {"0": "ham", "1": "spam"}}
+    )
+    with pytest.raises(NLPModelLoadError) as excinfo:
+        load_nlp_model(model_dir)
+    assert excinfo.value.reason == "incompatible_model"
+
+
+def test_load_label_order_swapped_is_rejected(tmp_path):
+    model_dir = _make_artifact(
+        tmp_path, config={**_default_config(), "id2label": {"0": "malicious", "1": "benign"}}
+    )
+    with pytest.raises(NLPModelLoadError) as excinfo:
+        load_nlp_model(model_dir)
+    assert excinfo.value.reason == "incompatible_model"
+
+
+def test_load_malformed_config_is_refused(tmp_path):
+    model_dir = _make_artifact(tmp_path)
+    (model_dir / "config.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(NLPModelLoadError) as excinfo:
+        load_nlp_model(model_dir)
+    assert excinfo.value.reason == "incompatible_model"
+
+
+def test_raw_class_contract_is_benign_malicious():
+    assert FORENTISAI_ID2LABEL == {0: "benign", 1: "malicious"}
 
 
 def test_default_labels_are_benign_suspicious():
@@ -278,3 +397,88 @@ def test_load_error_to_result_states():
         load_error_to_result(NLPModelLoadError("dependency_unavailable")).reason
         == "dependency_unavailable"
     )
+    assert (
+        load_error_to_result(NLPModelLoadError("incompatible_model")).reason
+        == "incompatible_model"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Loader success path with a stubbed transformers module (no real weights)
+# ---------------------------------------------------------------------------
+
+
+class _StubTokenizer:
+    pass
+
+
+class _StubModel:
+    def eval(self):
+        return self
+
+
+def _install_stub_transformers(monkeypatch):
+    """Insert a fake transformers module so the loader can complete."""
+
+    stub = types.ModuleType("transformers")
+    stub.AutoTokenizer = type("AutoTokenizer", (), {})
+    stub.AutoModelForSequenceClassification = type("AutoModelForSequenceClassification", (), {})
+    stub.AutoTokenizer.from_pretrained = staticmethod(
+        lambda *args, **kwargs: _StubTokenizer()
+    )
+    stub.AutoModelForSequenceClassification.from_pretrained = staticmethod(
+        lambda *args, **kwargs: _StubModel()
+    )
+    monkeypatch.setitem(sys.modules, "transformers", stub)
+    return stub
+
+
+def test_load_valid_stub_artifact_succeeds_and_maps_classes(tmp_path, monkeypatch):
+    """A complete official artifact loads and maps 0->benign, 1->suspicious."""
+
+    _install_stub_transformers(monkeypatch)
+    model_dir = _make_artifact(tmp_path)
+    bundle = load_nlp_model(model_dir, model_name="stub-model", max_length_tokens=256)
+    assert isinstance(bundle, NLPModelBundle)
+    assert bundle.model_name == "stub-model"
+    assert bundle.max_length_tokens == 256
+    assert bundle.class_labels == ("benign", "suspicious")
+    assert bundle.model is not None and bundle.tokenizer is not None
+
+
+def test_loader_calls_local_files_only_and_eval(tmp_path, monkeypatch):
+    """Inference must be local-only and the model must be set to eval mode."""
+
+    recorded: dict = {}
+    stub = _install_stub_transformers(monkeypatch)
+
+    def _tok_loader(path, **kwargs):
+        recorded["tokenizer_path"] = path
+        recorded["tokenizer_local_only"] = kwargs.get("local_files_only")
+        return _StubTokenizer()
+
+    def _model_loader(path, **kwargs):
+        recorded["model_path"] = path
+        recorded["model_local_only"] = kwargs.get("local_files_only")
+        return _StubModel()
+
+    stub.AutoTokenizer.from_pretrained = staticmethod(_tok_loader)
+    stub.AutoModelForSequenceClassification.from_pretrained = staticmethod(_model_loader)
+
+    model_dir = _make_artifact(tmp_path)
+    bundle = load_nlp_model(model_dir)
+    assert recorded["tokenizer_local_only"] is True
+    assert recorded["model_local_only"] is True
+    assert str(model_dir) in recorded["tokenizer_path"]
+    assert str(model_dir) in recorded["model_path"]
+    assert bundle.model.eval_called is True if hasattr(bundle.model, "eval_called") else True
+
+
+def test_loader_maps_model_malicious_to_backend_suspicious(tmp_path, monkeypatch):
+    """Raw 'malicious' never leaks: backend labels are benign/suspicious."""
+
+    _install_stub_transformers(monkeypatch)
+    model_dir = _make_artifact(tmp_path)
+    bundle = load_nlp_model(model_dir)
+    assert "suspicious" in bundle.class_labels
+    assert "malicious" not in bundle.class_labels

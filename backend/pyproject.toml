@@ -12,7 +12,9 @@ dependencies = [
     "python-multipart==0.0.20",
     "dnspython==2.8.0",
     "geoip2==5.1.0",
-    "scikit-learn==1.7.2",
+    # V1 production artifact pickled with sklearn 1.6.1; loader smoke-tests
+    # the estimator after unpickling (see docs/model_compatibility.md).
+    "scikit-learn>=1.6,<1.9",
     "numpy>=2.1",
     "joblib>=1.4",
     "shap==0.48.0",
@@ -20,6 +22,8 @@ dependencies = [
     "transformers==4.57.1",
     "tokenizers>=0.22",
     "sentencepiece>=0.2",
+    "psycopg[binary]>=3.2,<4",
+    "SQLAlchemy>=2.0,<3",
 ]
 
 [tool.pytest.ini_options]

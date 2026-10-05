@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from email.message import Message
 
+from app.extractor.unicode_safety import sanitize_unicode_text
 from app.schemas.email import HeaderSummary
 
 
@@ -19,10 +20,15 @@ def extract_headers(message: Message) -> HeaderSummary:
     raw_headers: dict[str, list[str]] = defaultdict(list)
     casefolded: dict[str, list[str]] = defaultdict(list)
     for name, value in message.raw_items():
-        raw_headers[name].append(value)
+        # Raw 8-bit header content can carry unpaired surrogates (the stdlib
+        # parses it with surrogateescape); sanitize here so NO header string
+        # that reaches evidence (raw, typed, or derived) can break UTF-8
+        # serialization downstream. All other characters are preserved.
+        safe_value = sanitize_unicode_text(value)
+        raw_headers[name].append(safe_value)
         # Header field names are case-insensitive. Keep values from differently
         # cased duplicate fields in source order instead of overwriting them.
-        casefolded[name.casefold()].append(value)
+        casefolded[name.casefold()].append(safe_value)
     mime_headers = {
         name: values
         for name, values in raw_headers.items()

@@ -6,6 +6,7 @@ import re
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
 
+from app.extractor.unicode_safety import sanitize_unicode_text
 from app.schemas.email import URLIndicator
 
 
@@ -28,7 +29,7 @@ def _strip_trailing_punctuation(value: str) -> str:
 def _make_indicator(candidate: str, source: str) -> URLIndicator | None:
     """Return a structured HTTP(S) indicator if the candidate is parseable."""
 
-    url = _strip_trailing_punctuation(candidate.strip())
+    url = sanitize_unicode_text(_strip_trailing_punctuation(candidate.strip()))
     if not url:
         return None
 
@@ -41,7 +42,11 @@ def _make_indicator(candidate: str, source: str) -> URLIndicator | None:
         hostname = parsed.hostname
     except ValueError:
         hostname = None
-    return URLIndicator(url=url, source=source, hostname=hostname)
+    return URLIndicator(
+        url=url,
+        source=source,
+        hostname=sanitize_unicode_text(hostname) if hostname else None,
+    )
 
 
 def _urls_in_text(text: str, source: str) -> list[URLIndicator]:

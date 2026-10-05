@@ -1,5 +1,8 @@
 """Shared application constants (single source of truth for limits)."""
 
+# Engine version reported in analysis metadata and reports.
+APP_VERSION = "0.1.0"
+
 # Step 1 email size limit. The API reuses this limit; it must not define a
 # second, conflicting value.
 DEFAULT_MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024

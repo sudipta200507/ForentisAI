@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ForentisAI — Options</title>
+    <style>
+      body { font: 14px/1.5 "Segoe UI", system-ui, sans-serif; margin: 24px auto; max-width: 560px; color: #1c2430; }
+      h1 { font-size: 18px; }
+      label { display: block; margin: 14px 0 4px; font-weight: 600; }
+      input { width: 100%; padding: 8px; border: 1px solid #c3ccd6; border-radius: 6px; font-size: 13px; }
+      .row { margin-top: 16px; display: flex; gap: 8px; }
+      button { padding: 8px 14px; border-radius: 6px; border: 1px solid #c3ccd6; background: #f4f6f8; cursor: pointer; }
+      button.primary { background: #2f6db3; border-color: #2f6db3; color: white; }
+      #status { margin-left: 8px; color: #2e9e5b; }
+      .hint { color: #5a6673; font-size: 12px; margin-top: 4px; }
+      code { background: #eef1f4; padding: 1px 5px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>ForentisAI extension options</h1>
+
+    <label for="backend-url">Backend URL</label>
+    <input id="backend-url" type="url" placeholder="http://127.0.0.1:8000" />
+    <div class="hint">
+      The ForentisAI FastAPI backend (default: local Docker stack at
+      <code>http://127.0.0.1:8000</code>). A non-default origin requires a one-time
+      permission grant — press "Save &amp; grant access".
+    </div>
+
+    <label for="timeout">Request timeout (seconds, 10–600)</label>
+    <input id="timeout" type="number" min="10" max="600" step="5" />
+
+    <div class="row">
+      <button id="save" class="primary">Save &amp; grant access</button>
+      <button id="signout">Clear Gmail token</button>
+      <span id="status"></span>
+    </div>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

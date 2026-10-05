@@ -1,0 +1,24 @@
+{
+  "forentisai_model": true,
+  "model_type": "deberta_v3_email_threat_classifier",
+  "base_model": "microsoft/deberta-v3-base",
+  "architecture": "DeBERTa-v3-base",
+  "task": "binary_email_threat_classification",
+  "labels": {
+    "0": "BENIGN",
+    "1": "MALICIOUS"
+  },
+  "max_sequence_length": 256,
+  "training_dataset": "ForentisAI_DeBERTa_Dataset_V2",
+  "training_dataset_type": "synthetic",
+  "best_checkpoint": "/content/forentisai_deberta_v3/checkpoint-1312",
+  "test_samples": 4499,
+  "test_metrics": {
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "roc_auc": 1.0
+  },
+  "warning": "These metrics were obtained on the synthetic ForentisAI V2 test set and must not be interpreted as real-world deployment performance."
+}

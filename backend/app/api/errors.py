@@ -25,18 +25,27 @@ from app.extractor.email_parser import (
 
 
 class ApiError(Exception):
-    """An API-layer error with a stable ``code`` and HTTP status."""
+    """An API-layer error with a stable ``code``, HTTP status, and headers."""
 
-    def __init__(self, status_code: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.headers = headers or {}
 
     def to_response(self) -> JSONResponse:
         return JSONResponse(
             status_code=self.status_code,
             content={"error": {"code": self.code, "message": self.message}},
+            headers=self.headers or None,
         )
 
 
@@ -54,6 +63,20 @@ ERROR_DEFINITIONS: dict[str, tuple[int, str]] = {
         502,
         "The authentication service returned an invalid response.",
     ),
+    "not_found": (404, "The requested resource was not found."),
+    "invalid_indicator_type": (
+        400,
+        "indicator_type must be one of: domain, hostname, ipv4, ipv6, url.",
+    ),
+    "unsupported_report_format": (
+        400,
+        "Only 'json' and 'html' report formats are supported.",
+    ),
+    "unauthorized": (
+        401,
+        "A valid API key is required (Authorization: Bearer <key> or X-API-Key).",
+    ),
+    "rate_limit_exceeded": (429, "Too many requests; retry later."),
     "internal_error": (500, "An unexpected internal error occurred."),
 }
 

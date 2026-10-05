@@ -3,6 +3,27 @@
 Runs the fine-tuned DeBERTa-v3 classifier locally and derives deterministic
 keyword-pattern indicators from the prepared model input text.
 
+CLASS-INDEX MAPPING (documented contract)
+========================================
+The trained ForentisAI artifact outputs raw Hugging Face classes
+(config.json ``id2label``): index 0 = "benign", index 1 = "malicious".
+The backend schema deliberately uses "suspicious" instead of the raw model
+label "malicious", because a model prediction is MODEL EVIDENCE, not a
+final security verdict. The mapping applied here is explicit and
+index-based (never keyword-based):
+
+    model probabilities[0] ("benign")    -> backend probabilities["benign"]
+    model probabilities[1] ("malicious") -> backend probabilities["suspicious"]
+
+so ``probabilities["suspicious"]`` IS the model's raw malicious-class
+probability, renamed for the evidence-only backend schema. The raw label
+"malicious" is never exposed as a security verdict by this backend.
+
+The DeBERTa probability IS the classification; the deterministic keyword
+lexicons below are supplementary MODEL INDICATORS (surface patterns for
+explainability). They never decide the predicted class and do NOT claim to
+explain the transformer's internal reasoning.
+
 Terminology contract (Phase F): indicators are "detected signals" /
 "model indicators" / "patterns" — NEVER "confirmed phishing" or similar.
 Keyword hits are pattern evidence for later phases, not verdicts.
@@ -76,8 +97,24 @@ def _detect_indicators(text: str) -> list[ModelIndicator]:
     return indicators[:_MAX_NLP_INDICATORS]
 
 
-def _probabilities_dict(labels: tuple[str, ...], probabilities) -> dict[str, float]:
-    return {str(label): float(prob) for label, prob in zip(labels, probabilities)}
+def _map_model_probabilities(model_probabilities) -> tuple[float, float] | None:
+    """Map raw model class probabilities to (benign, suspicious).
+
+    Explicit index-based mapping per the documented contract:
+    model index 0 = "benign", model index 1 = "malicious" (renamed to the
+    backend's evidence-only class "suspicious"). Returns None when the raw
+    output does not have exactly two class probabilities.
+    """
+
+    if model_probabilities is None:
+        return None
+    try:
+        values = [float(prob) for prob in model_probabilities]
+    except (TypeError, ValueError):
+        return None
+    if len(values) != 2:
+        return None
+    return values[0], values[1]
 
 
 def predict_nlp(text: str | None, bundle: NLPModelBundle | None) -> NLPResult:
@@ -116,7 +153,7 @@ def predict_nlp(text: str | None, bundle: NLPModelBundle | None) -> NLPResult:
         )
         with torch.no_grad():
             logits = model(**encoded).logits
-        probabilities = torch.softmax(logits, dim=-1)[0].tolist()
+        model_probabilities = torch.softmax(logits, dim=-1)[0].tolist()
     except Exception as error:  # noqa: BLE001 - inference failure is isolated
         return NLPResult(
             available=False,
@@ -125,17 +162,22 @@ def predict_nlp(text: str | None, bundle: NLPModelBundle | None) -> NLPResult:
             message=f"NLP model inference failed: {type(error).__name__}",
         )
 
-    labels = bundle.class_labels
-    prob_dict = _probabilities_dict(labels, probabilities)
-    suspicious = prob_dict.get("suspicious")
-    benign = prob_dict.get("benign")
+    # Explicit index-based mapping (see module docstring):
+    #   model probabilities[0] ("benign")    -> backend "benign"
+    #   model probabilities[1] ("malicious") -> backend "suspicious"
+    mapped = _map_model_probabilities(model_probabilities)
+    if mapped is None:
+        return NLPResult(
+            available=False,
+            status="error",
+            reason="incompatible_model",
+            message="NLP model returned an unexpected number of class probabilities.",
+        )
+    benign, suspicious = mapped
+    prob_dict = {"benign": benign, "suspicious": suspicious}
 
-    if suspicious is None:
-        predicted = "unknown"
-        confidence = None
-    else:
-        predicted = "suspicious" if (benign is None or suspicious >= benign) else "benign"
-        confidence = max(prob_dict.values()) if prob_dict else None
+    predicted = "suspicious" if suspicious >= benign else "benign"
+    confidence = max(benign, suspicious)
 
     indicators = _detect_indicators(text)
 
@@ -165,9 +207,14 @@ def load_error_to_result(error: NLPModelLoadError) -> NLPResult:
     reason = mapping.get(error.reason, "model_not_found")
     messages = {
         "model_not_trained": (
-            "NLP artifact is a base/foreign model without ForentisAI "
-            "fine-tune metadata; it is NOT a phishing classifier and is "
-            "refused for prediction. Fine-tune via ai/training/train_transformer.py."
+            "NLP artifact has no ForentisAI manifest (forentisai_model.json); "
+            "it is a base/foreign model, NOT a fine-tuned ForentisAI email "
+            "threat classifier, and is refused for prediction."
+        ),
+        "incompatible_model": (
+            "NLP artifact was rejected: it is not the official ForentisAI "
+            "deberta_v3_email_threat_classifier or its raw class contract "
+            "(0=benign, 1=malicious) does not match."
         ),
     }
     return NLPResult(

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ForentisAI</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="panel-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">ForentisAI</span>
+      </div>
+      <div class="header-actions">
+        <button id="reanalyze" class="ghost-btn" title="Re-analyze the current message" disabled>
+          Re-analyze
+        </button>
+        <button id="open-options" class="ghost-btn" title="Extension options">⚙</button>
+      </div>
+    </header>
+
+    <main id="root" class="panel-body" aria-live="polite">
+      <!-- Rendered by sidepanel.js from live backend data only. -->
+    </main>
+
+    <footer class="panel-footer">
+      <span id="backend-status" class="backend-status" title="Backend reachability">checking backend…</span>
+    </footer>
+
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

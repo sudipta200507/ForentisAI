@@ -1,16 +1,46 @@
-# ForentisAI local development services.
+# ForentisAI local development stack (Phase 9).
 #
-# STEP 2: Rspamd runs as a Dockerized service for email authentication and
-# security analysis. Both published ports are bound to the host loopback
-# interface only (127.0.0.1) so Rspamd is never reachable from the network:
-#   11333  normal worker  - the /checkv2 scanning HTTP API used by the client
-#   11334  controller     - the web interface, for local inspection only
-# Inside the Compose network the service is also reachable by DNS name
-# (`rspamd`), which is the default RSPAMD_URL for containerized callers.
+#   postgres  - persistence (derived data only; raw email bodies are never
+#               stored by the application)
+#   rspamd    - email authentication/security scanning (Step 2)
+#   backend   - FastAPI application (uvicorn) with the AI pipeline
 #
-# No privileged mode, no host filesystem mounts, no secrets in this file.
+# SECURITY NOTES
+# - All published ports bind to the host loopback interface (127.0.0.1) only.
+# - No privileged mode, no host filesystem mounts beyond the READ-ONLY model
+#   directory, no secrets in this file.
+# - PostgreSQL credentials are interpolated from the environment / .env;
+#   the fallback values are LOCAL DEVELOPMENT ONLY and must be overridden
+#   for any shared deployment.
+# - The DeBERTa model (~700 MB) is mounted into the container at runtime; it
+#   is never built into an image (see docs/deployment.md).
+#
+# Usage:
+#   copy .env.example .env, adjust, then:  docker compose up --build
+#   API docs:   http://127.0.0.1:8000/docs
+#   Rspamd UI:  http://127.0.0.1:11334  (local inspection only)
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: forentisai-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forentisai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forentisai_local_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-forentisai}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - forentisai-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-forentisai} -d ${POSTGRES_DB:-forentisai}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - forentisai
+    restart: "no"
+
   rspamd:
     image: rspamd/rspamd:latest
     container_name: forentisai-rspamd
@@ -22,6 +52,51 @@ services:
     networks:
       - forentisai
     restart: "no"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: forentisai-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rspamd:
+        condition: service_started
+    environment:
+      # Inside the Compose network the service is reached by DNS name.
+      RSPAMD_URL: http://rspamd:11333
+      RSPAMD_TIMEOUT_SECONDS: ${RSPAMD_TIMEOUT_SECONDS:-30}
+      # PostgreSQL persistence (derived data only).
+      FORENTISAI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-forentisai}:${POSTGRES_PASSWORD:-forentisai_local_dev}@postgres:5432/${POSTGRES_DB:-forentisai}
+      FORENTISAI_RETENTION_DAYS: ${FORENTISAI_RETENTION_DAYS:-30}
+      FORENTISAI_PERSIST_ENABLED: ${FORENTISAI_PERSIST_ENABLED:-true}
+      # Authentication strict vs degraded mode.
+      FORENTISAI_AUTH_STRICT: ${FORENTISAI_AUTH_STRICT:-true}
+      # API security. Set FORENTISAI_API_KEYS in .env; production fails
+      # closed when no keys are configured.
+      API_ENVIRONMENT: ${API_ENVIRONMENT:-local}
+      FORENTISAI_API_KEYS: ${FORENTISAI_API_KEYS:-}
+      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      API_RATE_LIMIT_REQUESTS: ${API_RATE_LIMIT_REQUESTS:-60}
+      API_RATE_LIMIT_WINDOW_SECONDS: ${API_RATE_LIMIT_WINDOW_SECONDS:-60}
+      # AI model artifact locations (mounted read-only below).
+      AI_ENABLED: ${AI_ENABLED:-true}
+      AI_MODEL_DIR: /models
+      NLP_MODEL_PATH: /models/nlp/forentisai_deberta_v3
+      TECHNICAL_MODEL_PATH: /models/technical_model.joblib
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Model artifacts stay on the host and are mounted read-only.
+      # They are never copied into the image.
+      - ./ai/models:/models:ro
+    networks:
+      - forentisai
+    restart: "no"
+
+volumes:
+  forentisai-postgres-data:
 
 networks:
   forentisai:

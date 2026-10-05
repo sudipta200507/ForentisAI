@@ -30,12 +30,17 @@ def test_response_contains_all_four_sections(client):
     response = _post(client)
     assert response.status_code == 200
     body = response.json()
+    # The four evidence sections plus the Phase 3/5/5A product sections.
     assert set(body.keys()) == {
         "schema_version",
+        "analysis_id",
         "email",
         "authentication",
         "intelligence",
         "ai",
+        "risk",
+        "forensics",
+        "metadata",
     }
     # Step 1-4 fields unchanged (still exactly their evidence shapes):
     assert body["email"]["schema_version"] == "1.0"

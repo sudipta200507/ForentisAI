@@ -103,13 +103,18 @@ class TestFailureResilience:
             )
         assert response.status_code == 200
         payload = response.json()
-        # Step 5 adds the ``ai`` section to the previous three-section shape.
+        # Step 5 adds the ``ai`` section; Phases 3/5/5A add ``analysis_id``,
+        # ``risk``, ``forensics``, and ``metadata``.
         assert set(payload) == {
             "schema_version",
+            "analysis_id",
             "email",
             "authentication",
             "intelligence",
             "ai",
+            "risk",
+            "forensics",
+            "metadata",
         }
         # Step 1 and Step 2 data still present and shaped as before.
         assert payload["email"]["file"]["filename"] == "step1_synthetic.eml"

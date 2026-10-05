@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 from app.ai.explainability.reasons import build_textual_reasons
 from app.ai.explainability.shap_explainer import explain_technical_prediction
+from app.ai.explainability.structured import build_structured_explanations
 from app.ai.fusion.classifier import fuse
 from app.ai.model_registry import get_nlp_bundle, get_technical_bundle
 from app.ai.nlp.inference import load_error_to_result as nlp_load_error_to_result
@@ -34,7 +35,10 @@ from app.ai.nlp.tokenizer import prepare_model_text
 from app.ai.technical_ml.inference import (
     load_error_to_result as technical_load_error_to_result,
 )
-from app.ai.technical_ml.inference import predict_technical, vector_to_array
+from app.ai.technical_ml.inference import (
+    predict_technical,
+    prediction_array,
+)
 from app.features.feature_fusion import build_feature_vector
 from app.schemas.ai import (
     AIAnalysis,
@@ -209,7 +213,9 @@ def build_ai_analysis(
     explanation_reason = None
     if technical_bundle is not None and technical_result.available:
         try:
-            array = vector_to_array(vector)
+            # The array must be in the bundle's OWN contract order (the v3
+            # production artifact uses its 28-feature order, not the 48).
+            array = prediction_array(vector, technical_bundle)
             explanation = explain_technical_prediction(technical_bundle, array)
             feature_contributions = explanation.contributions
             shap_available = explanation.shap_available
@@ -220,6 +226,14 @@ def build_ai_analysis(
     explainability = Explainability(
         feature_contributions=feature_contributions,
         textual_reasons=build_textual_reasons(nlp_result, technical_result, fusion),
+        explanations=build_structured_explanations(
+            evidence,
+            authentication,
+            intelligence,
+            nlp_result,
+            technical_result,
+            fusion,
+        ),
         shap_available=shap_available,
         reason=explanation_reason,
     )

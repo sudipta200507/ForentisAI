@@ -7,6 +7,15 @@ SHAP is deliberately NOT used: token attribution would require a separate
 validated implementation, and pretending SHAP applies there would produce
 fabricated explanations.
 
+Both artifact formats are supported:
+
+- format 2 (``TechnicalModelBundle``): classifier at
+  ``bundle.pipeline.named_steps["classifier"]``; contributions use the full
+  runtime 48-feature contract;
+- format 3 (``TechnicalModelV3Bundle``): the production V1 artifact — the
+  estimator is ``bundle.model`` and contributions use the artifact's exact
+  28-name contract.
+
 Failure behavior is total: any unsupported model, missing SHAP install, or
 explainer error yields an explicit unavailable state with a reason — never
 fabricated contributions and never an exception crossing the API boundary.
@@ -21,9 +30,11 @@ that the email is malicious or safe.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
+from app.ai.technical_ml.model import TechnicalModelBundle, TechnicalModelV3Bundle
 from app.schemas.ai import FeatureContribution
 from app.schemas.features import feature_names
 
@@ -40,11 +51,40 @@ class TechnicalExplanation:
     message: str | None = None
 
 
-def _classes_of(bundle) -> list[str]:
-    return [str(cls) for cls in bundle.pipeline.classes_]
+def _classifier_of(bundle: Any) -> Any:
+    """Extract the fitted classifier from either bundle format."""
+
+    if isinstance(bundle, TechnicalModelV3Bundle):
+        return bundle.model
+    if isinstance(bundle, TechnicalModelBundle):
+        return bundle.pipeline.named_steps.get("classifier")
+    return None
 
 
-def _suspicious_index(bundle) -> int | None:
+def _classes_of(bundle: Any) -> list[str]:
+    """Backend-facing class labels aligned with probability columns.
+
+    The v3 bundle carries canonical labels (its estimator may store integer
+    classes); the v2 pipeline exposes string classes directly.
+    """
+
+    if isinstance(bundle, TechnicalModelV3Bundle):
+        return list(bundle.class_labels)
+    classifier = _classifier_of(bundle)
+    if classifier is None:
+        return []
+    return [str(cls) for cls in getattr(classifier, "classes_", [])]
+
+
+def _feature_names_of(bundle: Any) -> tuple[str, ...]:
+    """Feature-name contract matching the array fed to this bundle."""
+
+    if isinstance(bundle, TechnicalModelV3Bundle):
+        return bundle.feature_names
+    return feature_names()
+
+
+def _suspicious_index(bundle: Any) -> int | None:
     classes = _classes_of(bundle)
     try:
         return classes.index("suspicious")
@@ -52,12 +92,14 @@ def _suspicious_index(bundle) -> int | None:
         return None
 
 
-def _explain_tree(bundle, array: np.ndarray, class_index: int) -> list[FeatureContribution]:
+def _explain_tree(
+    bundle: Any, array: np.ndarray, class_index: int, names: tuple[str, ...]
+) -> list[FeatureContribution]:
     import shap
 
-    classifier = bundle.pipeline.named_steps.get("classifier")
+    classifier = _classifier_of(bundle)
     if classifier is None:
-        raise TypeError("pipeline has no 'classifier' step")
+        raise TypeError("bundle has no fitted classifier")
     explainer = shap.TreeExplainer(classifier)
     shap_values = explainer.shap_values(array)
 
@@ -72,17 +114,17 @@ def _explain_tree(bundle, array: np.ndarray, class_index: int) -> list[FeatureCo
         else:
             raise TypeError(f"unexpected shap_values shape {array_values.shape}")
 
-    return _to_contributions(values, array[0])
+    return _to_contributions(values, array[0], names)
 
 
-def _explain_linear(bundle, array: np.ndarray) -> list[FeatureContribution]:
+def _explain_linear(bundle: Any, array: np.ndarray, names: tuple[str, ...]) -> list[FeatureContribution]:
     """Documented fallback for linear models: coefficient × feature value.
 
     This is a standard linear-model attribution approximation, clearly not
     SHAP; ``shap_available`` stays False for this path.
     """
 
-    classifier = bundle.pipeline.named_steps.get("classifier")
+    classifier = _classifier_of(bundle)
     classes = _classes_of(bundle)
     coefficients = np.asarray(classifier.coef_)
     if coefficients.ndim == 2:
@@ -93,11 +135,12 @@ def _explain_linear(bundle, array: np.ndarray) -> list[FeatureContribution]:
         else:
             class_index = classes.index("suspicious") if "suspicious" in classes else -1
             coefficients = coefficients[class_index]
-    return _to_contributions(coefficients * array[0], array[0])
+    return _to_contributions(coefficients * array[0], array[0], names)
 
 
-def _to_contributions(values: np.ndarray, feature_values: np.ndarray) -> list[FeatureContribution]:
-    names = list(feature_names())
+def _to_contributions(
+    values: np.ndarray, feature_values: np.ndarray, names: tuple[str, ...]
+) -> list[FeatureContribution]:
     contributions: list[FeatureContribution] = []
     for index, raw_value in enumerate(np.asarray(values).ravel()):
         if index >= len(names):
@@ -117,11 +160,11 @@ def _to_contributions(values: np.ndarray, feature_values: np.ndarray) -> list[Fe
     return contributions[:_MAX_CONTRIBUTIONS]
 
 
-def explain_technical_prediction(bundle, array: np.ndarray) -> TechnicalExplanation:
+def explain_technical_prediction(bundle: Any, array: np.ndarray) -> TechnicalExplanation:
     """Explain one technical prediction; total function never raises.
 
-    ``array`` is the 2-D feature array produced by
-    ``app.ai.technical_ml.inference.vector_to_array``.
+    ``array`` must be the 2-D feature array in this bundle's own contract
+    order (``app.ai.technical_ml.inference.prediction_array``).
     """
 
     try:
@@ -132,11 +175,12 @@ def explain_technical_prediction(bundle, array: np.ndarray) -> TechnicalExplanat
                 message="Model classes do not include 'suspicious'; nothing to attribute.",
             )
 
-        classifier = bundle.pipeline.named_steps.get("classifier")
+        classifier = _classifier_of(bundle)
         classifier_class_name = type(classifier).__name__
+        names = _feature_names_of(bundle)
 
         if "Forest" in classifier_class_name or "Boosting" in classifier_class_name:
-            contributions = _explain_tree(bundle, array, class_index)
+            contributions = _explain_tree(bundle, array, class_index, names)
             return TechnicalExplanation(
                 contributions=contributions,
                 shap_available=True,
@@ -144,7 +188,7 @@ def explain_technical_prediction(bundle, array: np.ndarray) -> TechnicalExplanat
             )
 
         if "LogisticRegression" in classifier_class_name:
-            contributions = _explain_linear(bundle, array)
+            contributions = _explain_linear(bundle, array, names)
             return TechnicalExplanation(
                 contributions=contributions,
                 shap_available=False,

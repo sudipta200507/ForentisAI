@@ -42,6 +42,27 @@ def _suspicious_probability(probabilities: dict[str, float]) -> float | None:
     return max(0.0, min(1.0, float(value)))
 
 
+def _model_status(nlp: NLPResult, technical: TechnicalMLResult) -> dict[str, str]:
+    """Explicit availability map so degraded operation is never hidden."""
+
+    return {
+        "nlp": "available" if (nlp.available and nlp.status == "available") else "unavailable",
+        "technical_ml": "available"
+        if (technical.available and technical.status == "available")
+        else "unavailable",
+    }
+
+
+def _mode(nlp_p: float | None, tech_p: float | None) -> str:
+    if nlp_p is not None and tech_p is not None:
+        return "full"
+    if nlp_p is not None:
+        return "nlp_only"
+    if tech_p is not None:
+        return "technical_only"
+    return "none"
+
+
 def fuse(
     nlp: NLPResult,
     technical: TechnicalMLResult,
@@ -49,7 +70,15 @@ def fuse(
     nlp_weight: float = _DEFAULT_NLP_WEIGHT,
     technical_weight: float = _DEFAULT_TECHNICAL_WEIGHT,
 ) -> FusionResult:
-    """Fuse component results deterministically; total function never raises."""
+    """Fuse component results deterministically; total function never raises.
+
+    Availability handling (never hidden, never manufactured):
+    - both available → weighted mean (mode "full");
+    - one available → renormalized weights (mode "nlp_only"/"technical_only");
+    - neither available → fusion stays ``unavailable`` with mode "none" and
+      NO probability is produced. Downstream rule/evidence assessment (the
+      risk engine) is responsible for any low-confidence verdict in that case.
+    """
 
     nlp_p = _suspicious_probability(nlp.probabilities) if nlp.available else None
     tech_p = (
@@ -57,7 +86,8 @@ def fuse(
     )
 
     signals: list[FusionSignal] = []
-    contributions: list[tuple[float, float]] = []  # (weight, p_suspicious)
+    status = _model_status(nlp, technical)
+    mode = _mode(nlp_p, tech_p)
 
     nlp_effective = nlp_weight if nlp_p is not None else 0.0
     tech_effective = technical_weight if tech_p is not None else 0.0
@@ -89,9 +119,13 @@ def fuse(
             status="unavailable",
             reason=reason,  # type: ignore[arg-type]
             signals=signals,
+            mode=mode,  # "none"
+            model_status=status,
             message=(
                 "Fusion unavailable: neither the NLP nor the technical model "
-                "produced usable evidence. This is not a benign prediction."
+                "produced usable evidence. This is not a benign prediction; "
+                "downstream assessment may proceed on non-model evidence only, "
+                "with reduced confidence."
             ),
         )
 
@@ -102,6 +136,8 @@ def fuse(
             status="unavailable",
             reason="invalid_input",
             signals=signals,
+            mode=mode,
+            model_status=status,
             message="Fusion weights sum to zero; no combination possible.",
         )
 
@@ -122,9 +158,15 @@ def fuse(
                 "reflects the models' combined evidence only."
             )
     elif nlp_p is not None:
-        messages.append("Only the NLP component contributed to this fusion.")
+        messages.append(
+            "Only the NLP component contributed: the technical-ML model was "
+            "unavailable and its weight was renormalized."
+        )
     else:
-        messages.append("Only the technical-ML component contributed to this fusion.")
+        messages.append(
+            "Only the technical-ML component contributed: the NLP model was "
+            "unavailable and its weight was renormalized."
+        )
 
     return FusionResult(
         available=True,
@@ -137,6 +179,8 @@ def fuse(
         },
         confidence=round(confidence, 6),
         signals=signals,
+        mode=mode,  # type: ignore[arg-type]
+        model_status=status,
         message=" ".join(messages) or None,
     )
 

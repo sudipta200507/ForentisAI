@@ -1,24 +1,78 @@
-# Python virtual environments and generated test artifacts
+# ================================
+# Python virtual environments
+# ================================
 backend/.venv/
+.venv/
+venv/
+
+# Python cache
 __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# Local configuration
+# ================================
+# Environment / secrets
+# ================================
 .env
+.env.local
+.env.*.local
 
-# Step 5: model artifacts and datasets are never committed (large binaries;
-# train locally via ai/training/). Keep only the directory placeholder.
-ai/models/*
-!ai/models/.gitkeep
+# Keep the example configuration
+!.env.example
+
+# ================================
+# AI datasets
+# ================================
 ai/datasets/external/*
 ai/datasets/processed/*
 ai/datasets/raw/*
-ai/models/nlp/
 
-# Step 5: training run outputs
+# Training outputs
 ai/training/runs/
 lightning_logs/
-*.joblib
-*.safetensors
-*.bin
+
+# ================================
+# AI model artifacts
+# ================================
+# Models are intentionally tracked through Git LFS.
+# Do NOT ignore *.joblib or *.safetensors.
+
+# ================================
+# Frontend
+# ================================
+frontend/node_modules/
+frontend/dist/
+
+# ================================
+# Chrome extension
+# ================================
+extension/*.zip
+
+# ================================
+# Local databases
+# ================================
+*.db
+*.sqlite
+*.sqlite3
+
+# ================================
+# Logs
+# ================================
+*.log
+
+# ================================
+# OS
+# ================================
+.DS_Store
+Thumbs.db
+
+# ================================
+# IDE
+# ================================
+.vscode/
+.idea/
+
+# ================================
+# Generated/local metadata
+# ================================
+.freebuff/

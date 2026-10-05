@@ -100,7 +100,13 @@ class NLPResult(EvidenceModel):
 
 
 class TechnicalMLResult(EvidenceModel):
-    """Classical scikit-learn component result (model evidence only)."""
+    """Classical scikit-learn component result (model evidence only).
+
+    The v3 provenance fields are populated only by the production V1
+    (format-3) artifact; the legacy fixture bundle leaves them ``None``.
+    ``threshold`` is the artifact's stored suspicious-class decision
+    threshold and is the value actually applied at inference.
+    """
 
     available: bool = False
     status: AIStatus = "unavailable"
@@ -111,6 +117,32 @@ class TechnicalMLResult(EvidenceModel):
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     indicators: list[ModelIndicator] = Field(default_factory=list)
     message: str | None = None
+    # Format-3 (production V1) artifact provenance:
+    threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    artifact_format_version: int | None = None
+    feature_contract_version: str | None = None
+    dataset_name: str | None = None
+    model_feature_count: int | None = Field(default=None, ge=1)
+
+
+class StructuredExplanation(EvidenceModel):
+    """One structured, human-readable explanation entry.
+
+    Explanations are EVIDENCE/REASON statements produced by deterministic
+    rules (keyword patterns, header/URL checks, authentication outcomes) or
+    by model outputs restated in plain language. They are NOT exact
+    transformer token attributions and never claim certainty about intent.
+
+    ``category`` is a stable identifier (e.g. ``credential_harvesting``);
+    ``impact`` is a coarse qualitative weight (low/medium/high); ``evidence``
+    is a short factual anchor (indicator values, counts) with no raw email
+    body text.
+    """
+
+    reason: str = Field(min_length=1)
+    category: str = Field(min_length=1)
+    impact: Literal["low", "medium", "high"] = "low"
+    evidence: str = Field(min_length=1)
 
 
 class FusionSignal(EvidenceModel):
@@ -141,6 +173,11 @@ class FusionResult(EvidenceModel):
     probabilities: dict[str, float] = Field(default_factory=dict)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     signals: list[FusionSignal] = Field(default_factory=list)
+    # Explicit degraded-operation reporting (never hidden):
+    # "full" = both models contributed; "nlp_only" / "technical_only" = one
+    # model contributed (weights renormalized); "none" = no model evidence.
+    mode: Literal["full", "nlp_only", "technical_only", "none"] = "none"
+    model_status: dict[str, str] = Field(default_factory=dict)
     message: str | None = None
 
 
@@ -150,10 +187,13 @@ class Explainability(EvidenceModel):
     ``feature_contributions`` come from SHAP (or the linear fallback) on the
     classical model only. ``textual_reasons`` are human-readable model
     signals — they are explicitly NOT explanations of transformer internals.
+    ``explanations`` are structured evidence-based entries (category + impact
+    + factual evidence) built by deterministic rules and model-output restatements.
     """
 
     feature_contributions: list[FeatureContribution] = Field(default_factory=list)
     textual_reasons: list[str] = Field(default_factory=list)
+    explanations: list[StructuredExplanation] = Field(default_factory=list)
     shap_available: bool = False
     reason: UnavailabilityReason | None = None
 

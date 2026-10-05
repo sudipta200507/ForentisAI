@@ -1,1 +1,16 @@
-# Infrastructure services placeholder.
+# Infrastructure note
+#
+# The working ForentisAI local stack (PostgreSQL + Rspamd + backend) is
+# defined ONCE in the repository-root docker-compose.yml. This directory
+# holds deployment-specific artifacts only:
+#
+#   deployment/   hosted-platform configurations (render.yaml, vercel.json)
+#   rspamd/       optional custom Rspamd image (the stack uses the official
+#                 image; see the Dockerfile for when to build a custom one)
+#
+# Start the stack from the repository root:
+#
+#   docker compose up --build
+#
+# See docs/deployment.md for the full guide, including the model artifact
+# strategy (the DeBERTa model is never baked into an image).

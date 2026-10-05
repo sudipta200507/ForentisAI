@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from email.message import Message
 
+from app.extractor.unicode_safety import sanitize_unicode_text
 from app.schemas.email import ParserDefect
 
 
@@ -36,7 +37,7 @@ def _decode_part(part: Message) -> tuple[str | None, str | None]:
     if payload is None:
         source_payload = part.get_payload()
         if isinstance(source_payload, str):
-            return source_payload, None
+            return sanitize_unicode_text(source_payload), None
         if isinstance(source_payload, bytes):
             payload = source_payload
         else:
@@ -44,7 +45,7 @@ def _decode_part(part: Message) -> tuple[str | None, str | None]:
 
     charset = part.get_content_charset() or "utf-8"
     try:
-        return payload.decode(charset), None
+        return sanitize_unicode_text(payload.decode(charset)), None
     except LookupError:
         return payload.decode("utf-8", errors="replace"), (
             f"Unknown declared charset {charset!r}; decoded as UTF-8 with replacement"

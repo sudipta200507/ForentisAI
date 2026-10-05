@@ -12,6 +12,7 @@ from app.extractor.attachment_parser import extract_attachments
 from app.extractor.body_parser import extract_bodies
 from app.extractor.header_parser import extract_headers
 from app.extractor.url_extractor import extract_urls
+from app.extractor.unicode_safety import has_lone_surrogates, sanitize_unicode_text
 from app.schemas.email import (
     EmailAddress,
     EmailBody,
@@ -44,7 +45,9 @@ def build_file_metadata(raw_bytes: bytes, filename: str) -> FileMetadata:
 
 def _header_value(message: Message, name: str) -> str | None:
     value = message.get(name)
-    return str(value) if value is not None else None
+    # Raw 8-bit headers can carry unpaired surrogates; sanitize at the read
+    # point so subject/date/message-id/return-path are always UTF-8 safe.
+    return sanitize_unicode_text(str(value)) if value is not None else None
 
 
 def _parse_addresses(values: Iterable[str]) -> list[EmailAddress]:
@@ -52,8 +55,8 @@ def _parse_addresses(values: Iterable[str]) -> list[EmailAddress]:
 
     addresses: list[EmailAddress] = []
     for display_name, address in getaddresses(list(values)):
-        clean_display_name = display_name.strip() or None
-        clean_address = address.strip() or None
+        clean_display_name = sanitize_unicode_text(display_name).strip() or None
+        clean_address = sanitize_unicode_text(address).strip() or None
         if clean_display_name is None and clean_address is None:
             continue
         addresses.append(
@@ -63,7 +66,7 @@ def _parse_addresses(values: Iterable[str]) -> list[EmailAddress]:
 
 
 def _describe_defect(defect: object) -> str:
-    detail = str(defect).strip()
+    detail = sanitize_unicode_text(str(defect)).strip()
     return f"{type(defect).__name__}: {detail}" if detail else type(defect).__name__
 
 
@@ -79,6 +82,7 @@ def _mail_parser_defects(mail_message: Any | None) -> list[ParserDefect]:
             value = getattr(mail_message, attribute, None)
         except Exception:
             continue
+        # Defect messages may embed raw header fragments; keep them UTF-8 safe.
         if not value:
             continue
         if isinstance(value, dict):
@@ -86,7 +90,7 @@ def _mail_parser_defects(mail_message: Any | None) -> list[ParserDefect]:
                 defects.append(
                     ParserDefect(
                         source="mail-parser",
-                        message=f"{attribute}.{key}: {item}",
+                        message=sanitize_unicode_text(f"{attribute}.{key}: {item}"),
                     )
                 )
         elif isinstance(value, (list, tuple, set)):
@@ -101,6 +105,21 @@ def _mail_parser_defects(mail_message: Any | None) -> list[ParserDefect]:
     return defects
 
 
+def _count_malformed_unicode_surfaces(message: Message) -> int:
+    """Count raw header values that contained unpaired surrogates.
+
+    Used only for the transparency defect; the actual sanitization happens at
+    each extraction read point (header_parser, body_parser, attachment_parser,
+    normalizer). Bodies are already replace-decoded by body_parser.
+    """
+
+    count = 0
+    for _name, value in message.raw_items():
+        if has_lone_surrogates(value):
+            count += 1
+    return count
+
+
 def _mime_information(message: Message) -> MimeInformation:
     """Describe MIME layout without storing or executing attachment content."""
 
@@ -113,8 +132,16 @@ def _mime_information(message: Message) -> MimeInformation:
                 content_type=part.get_content_type(),
                 content_disposition=part.get_content_disposition(),
                 charset=part.get_content_charset(),
-                filename=part.get_filename(),
-                content_id=part.get("Content-ID"),
+                filename=(
+                    sanitize_unicode_text(part.get_filename())
+                    if part.get_filename()
+                    else None
+                ),
+                content_id=(
+                    sanitize_unicode_text(part.get("Content-ID"))
+                    if part.get("Content-ID")
+                    else None
+                ),
             )
         )
 
@@ -166,6 +193,22 @@ def normalize_email(
     defects.extend(_mail_parser_defects(mail_message))
     defects.extend(body_result.defects)
     defects.extend(attachment_result.defects)
+
+    # Transparency: record (without failing) when malformed Unicode was
+    # encountered so consumers know replacement characters may be present.
+    malformed_unicode_surfaces = _count_malformed_unicode_surfaces(message)
+    if malformed_unicode_surfaces:
+        defects.append(
+            ParserDefect(
+                source="unicode-safety",
+                message=(
+                    "Malformed Unicode in the original email: unpaired surrogate "
+                    "code points in "
+                    f"{malformed_unicode_surfaces} header value(s) were replaced "
+                    "with U+FFFD during extraction (evidence preserved)."
+                ),
+            )
+        )
 
     return EmailEvidence(
         file=file_metadata,

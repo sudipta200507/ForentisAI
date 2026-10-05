@@ -37,15 +37,18 @@ RandomForest over features           local inference on prepared text
 | --- | --- |
 | Feature pipeline | **Implemented** and deterministic |
 | Technical ML (RandomForest) | **Implemented**; trained **only on a synthetic pipeline-validation fixture** — not a production model |
-| DeBERTa-v3 NLP | **Implemented** (inference + fine-tuning pipeline); **no fine-tuned artifact exists**, so NLP reports `unavailable` |
+| DeBERTa-v3 NLP | **Implemented with the fine-tuned ForentisAI artifact** (`forentisai_deberta_v3`, 184,423,682 parameters, trained from `microsoft/deberta-v3-base`). Loaded strictly locally; the backend refuses any artifact without the official `forentisai_model.json` manifest |
 | Fusion | **Implemented** (documented weighted mean) |
 | Explainability | **Implemented** (SHAP TreeExplainer; linear fallback; graceful degradation) |
-| Production training | **Blocked on a legitimate labeled dataset** — see `ai/datasets/README.md` |
+| Production validation | **Pending**: independent evaluation on REAL emails is still required — see `ai/datasets/README.md` |
 
-No accuracy metric from the fixture model may be quoted as real-world
-performance. The base `microsoft/deberta-v3-base` model is **not** a
-phishing classifier; the inference layer refuses any artifact without the
-ForentisAI fine-tune marker.
+**Evaluation honesty:** the NLP artifact was trained on
+`ForentisAI_DeBERTa_Dataset_V2`, which is a **synthetic** dataset. Its
+held-out V2 test metrics (accuracy/precision/recall/F1/ROC-AUC = 1.000 on
+4,499 synthetic samples) are **synthetic-dataset metrics only**. They do
+**not** establish real-world deployment performance, and no
+"100% accurate phishing detector" claim may be made. Independent
+real-email evaluation is still required before any production claim.
 
 ### Feature pipeline (`backend/app/features/`)
 
@@ -86,6 +89,14 @@ keyword-pattern indicators (urgency, credential request, payment request,
 authority claims, BEC-style requests, …) phrased as **model indicators**,
 never "confirmed" findings.
 
+The trained model's raw classes are `0 = benign`, `1 = malicious`. The
+backend intentionally exposes the second class as **"suspicious"**, because
+a model prediction is model evidence, not a final security verdict — the
+raw label "malicious" is never surfaced as a verdict. The DeBERTa
+probability alone decides the predicted class; keyword indicators are
+supplementary signals and do not claim to explain the transformer's
+internal reasoning.
+
 ### Fusion (`backend/app/ai/fusion/`)
 
 `p_fused(suspicious) = Σ wᵢ·pᵢ / Σ wᵢ` over available components only
@@ -119,8 +130,8 @@ transformer. Textual reasons are model signals, not verdicts.
 | `AI_ENABLED` | `true` | Master switch; `false` → explicit `not_enabled` states |
 | `AI_MODEL_DIR` | `ai/models` | Base directory for artifacts (relative paths resolve against the project root) |
 | `TECHNICAL_MODEL_PATH` | `$AI_MODEL_DIR/technical_model.joblib` | Technical artifact |
-| `NLP_MODEL_PATH` | unset | Fine-tuned DeBERTa directory; unset → NLP `unavailable` |
-| `NLP_MODEL_NAME` | `microsoft/deberta-v3-base` | Base model for **training** (never used for prediction itself) |
+| `NLP_MODEL_PATH` | `ai/models/nlp/forentisai_deberta_v3` | Fine-tuned ForentisAI artifact directory (relative paths resolve against the project root; missing/invalid artifact → explicit `unavailable`, never a download) |
+| `NLP_MODEL_NAME` | `microsoft/deberta-v3-base` | Base model the artifact was trained from (the base model itself is never used for prediction) |
 | `AI_MAX_TEXT_LENGTH` | `6000` | Character bound on prepared model text |
 | `AI_INFERENCE_TIMEOUT_SECONDS` | `20.0` | Per-model inference timeout |
 
@@ -152,11 +163,17 @@ committed). Dataset requirements and the honesty rules are documented in
 
 ### Step 5 limitations
 
-- **No production model exists.** The only trained technical artifact is the
-  clearly-marked fixture model; the NLP component has no artifact at all and
-  reports `unavailable` until one is fine-tuned on a real dataset.
+- **Real-world NLP performance is unproven.** The fine-tuned DeBERTa-v3
+  artifact was trained and evaluated on the synthetic
+  `ForentisAI_DeBERTa_Dataset_V2` (held-out V2 metrics: 1.000 across
+  accuracy/precision/recall/F1/ROC-AUC on 4,499 samples). These are
+  synthetic-dataset metrics only; independent real-email evaluation is
+  still required.
+- The technical RandomForest remains a synthetic pipeline-validation
+  fixture model, not a production model.
 - NLP keyword indicators are surface patterns; they complement — never
-  replace — the model probability.
+  replace — the model probability, and they do not explain the
+  transformer's internal reasoning.
 - SHAP contributions are attributions relative to the model's suspicious
   class, not evidence about the world.
 - The registered-domain heuristic is conservative (no Public Suffix List),

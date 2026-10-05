@@ -19,6 +19,11 @@ DEFAULT_API_CORS_ORIGINS: tuple[str, ...] = (
 # are always derived from the repository layout or environment variables,
 # never from machine-specific hard-coded locations.
 DEFAULT_AI_MODEL_DIR = Path("ai") / "models"
+# Official fine-tuned DeBERTa-v3 email-threat classifier artifact directory
+# (relative to the project root; trained on ForentisAI_DeBERTa_Dataset_V2).
+# This is the DEFAULT NLP artifact location: it is resolved against the
+# project root and stays a local, git-ignored deployment artifact.
+DEFAULT_NLP_MODEL_DIR = Path("ai") / "models" / "nlp" / "forentisai_deberta_v3"
 DEFAULT_NLP_MODEL_NAME = "microsoft/deberta-v3-base"
 DEFAULT_TECHNICAL_MODEL_FILENAME = "technical_model.joblib"
 DEFAULT_AI_MAX_TEXT_LENGTH = 6000
@@ -61,6 +66,33 @@ def load_rspamd_settings() -> RspamdSettings:
             0.1,
         ),
         scan_path=DEFAULT_RSPAMD_SCAN_PATH,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AuthSettings:
+    """Authentication orchestration mode (Phase 4 degraded mode).
+
+    ``strict_mode=True`` (default) preserves the historical behavior: when
+    Rspamd cannot be reached the analysis request fails with a controlled
+    503 — authentication is mandatory.
+
+    ``strict_mode=False`` (``FORENTISAI_AUTH_STRICT=false``) enables
+    DEGRADED mode: a Rspamd infrastructure failure becomes an explicit
+    ``unavailable`` authentication status and the analysis continues with
+    the remaining evidence. Model and risk-engine confidence is reduced and
+    the response states the limitation. Authentication failure is NEVER
+    converted into a passing result.
+    """
+
+    strict_mode: bool = True
+
+
+def load_auth_settings() -> AuthSettings:
+    """Build auth-mode settings from ``FORENTISAI_AUTH_STRICT``."""
+
+    return AuthSettings(
+        strict_mode=_env_bool("FORENTISAI_AUTH_STRICT", True),
     )
 
 
@@ -127,10 +159,15 @@ def load_intelligence_env_settings() -> IntelligenceEnvSettings:
 class AISettings:
     """Step 5 AI pipeline settings sourced from environment variables.
 
-    ``model_dir`` is the default location for model artifacts; explicit
-    ``technical_model_path``/``nlp_model_path`` overrides win when set.
-    Relative paths are resolved against the project root (the parent of the
-    ``backend`` package), so no machine-specific paths are hard-coded.
+    ``model_dir`` is the default location for the technical model artifact;
+    explicit ``technical_model_path``/``nlp_model_path`` overrides win when
+    set. ``nlp_model_path`` defaults to the official fine-tuned ForentisAI
+    artifact directory (``ai/models/nlp/forentisai_deberta_v3``, resolved
+    against the project root); when that artifact is absent the NLP
+    component reports an explicit ``model_not_found`` state — it never
+    downloads anything. Relative paths are resolved against the project
+    root (the parent of the ``backend`` package), so no machine-specific
+    paths are hard-coded.
     """
 
     ai_enabled: bool = True
@@ -171,9 +208,11 @@ def load_ai_settings() -> AISettings:
         technical_model_path=(
             _resolve_model_path(raw_technical, model_dir / DEFAULT_TECHNICAL_MODEL_FILENAME)
         ),
-        nlp_model_path=(
-            _resolve_model_path(raw_nlp, model_dir / "nlp") if raw_nlp else None
-        ),
+        # NLP defaults to the official fine-tuned ForentisAI artifact
+        # directory; NLP_MODEL_PATH overrides it (relative paths resolve
+        # against the project root). Never None: a missing artifact is an
+        # explicit model_not_found state, not a silent skip.
+        nlp_model_path=_resolve_model_path(raw_nlp, DEFAULT_NLP_MODEL_DIR),
         nlp_model_name=(os.environ.get("NLP_MODEL_NAME") or "").strip()
         or DEFAULT_NLP_MODEL_NAME,
         max_text_length=max(_env_int("AI_MAX_TEXT_LENGTH", DEFAULT_AI_MAX_TEXT_LENGTH), 256),
@@ -181,6 +220,39 @@ def load_ai_settings() -> AISettings:
             _env_float("AI_INFERENCE_TIMEOUT_SECONDS", DEFAULT_AI_INFERENCE_TIMEOUT_SECONDS),
             0.5,
         ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseSettings:
+    """Persistence settings (Phase 6).
+
+    ``url`` defaults to a local SQLite file; any SQLAlchemy URL (e.g.
+    PostgreSQL) is accepted. ``retention_days`` bounds how long derived
+    analysis records are kept (0 = keep indefinitely). Raw email bodies are
+    never stored regardless of these settings.
+    """
+
+    url: str = "sqlite:///./forentisai.db"
+    retention_days: int = 30
+    persist_enabled: bool = True
+
+
+def load_database_settings() -> DatabaseSettings:
+    """Build database settings from the ``FORENTISAI_DATABASE_*`` env vars."""
+
+    raw_url = (os.environ.get("FORENTISAI_DATABASE_URL") or "").strip()
+    retention_raw = (os.environ.get("FORENTISAI_RETENTION_DAYS") or "").strip()
+    retention = 30
+    if retention_raw:
+        try:
+            retention = max(0, int(retention_raw))
+        except ValueError:
+            retention = 30
+    return DatabaseSettings(
+        url=raw_url or "sqlite:///./forentisai.db",
+        retention_days=retention,
+        persist_enabled=_env_bool("FORENTISAI_PERSIST_ENABLED", True),
     )
 
 
@@ -210,4 +282,43 @@ def load_api_settings() -> ApiSettings:
     return ApiSettings(
         cors_origins=origins or DEFAULT_API_CORS_ORIGINS,
         environment=environment,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SecuritySettings:
+    """Phase 8 API security settings sourced from environment variables.
+
+    ``api_keys`` comes from ``FORENTISAI_API_KEYS`` (comma-separated; empty
+    by default). ``API_ENVIRONMENT=local`` (default) with no keys permits
+    unauthenticated local development; any other environment fails closed.
+    Rate limiting bounds requests per identity per window (in-memory).
+    """
+
+    api_keys: tuple[str, ...] = ()
+    environment: str = "local"
+    rate_limit_requests: int = 60
+    rate_limit_window_seconds: float = 60.0
+
+
+def load_security_settings() -> "SecuritySettings":
+    """Build security settings from ``FORENTISAI_API_KEYS``/``API_*`` env vars."""
+
+    from app.core.security import SecuritySettings as _SecuritySettings
+
+    raw_keys = (os.environ.get("FORENTISAI_API_KEYS") or "").strip()
+    keys = tuple(
+        key.strip() for key in raw_keys.split(",") if key.strip()
+    )
+    environment = (os.environ.get("API_ENVIRONMENT") or "local").strip().casefold()
+    return _SecuritySettings(
+        api_keys=keys,
+        environment=environment,
+        rate_limit_requests=max(
+            1, _env_int("API_RATE_LIMIT_REQUESTS", 60)
+        ),
+        rate_limit_window_seconds=max(
+            0.1,
+            _env_float("API_RATE_LIMIT_WINDOW_SECONDS", 60.0),
+        ),
     )

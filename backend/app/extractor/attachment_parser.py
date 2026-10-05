@@ -6,6 +6,7 @@ import hashlib
 from dataclasses import dataclass
 from email.message import Message
 
+from app.extractor.unicode_safety import sanitize_unicode_text
 from app.schemas.email import AttachmentMetadata, ParserDefect
 
 
@@ -40,8 +41,13 @@ def extract_attachments(message: Message) -> AttachmentExtraction:
             continue
 
         try:
+            # Attachment filenames and Content-IDs are display metadata decoded
+            # from attacker-controlled header bytes; sanitize unpaired
+            # surrogates so they can never break downstream UTF-8 output.
             filename = part.get_filename()
+            filename = sanitize_unicode_text(filename) if filename else None
             content_id = part.get("Content-ID")
+            content_id = sanitize_unicode_text(content_id) if content_id else None
             if not _is_attachment(part, filename, content_id):
                 continue
 

@@ -6,7 +6,11 @@ uvicorn==0.41.0
 python-multipart==0.0.20
 dnspython==2.8.0
 geoip2==5.1.0
-scikit-learn==1.7.2
+# The V1 production artifact (technical_model.joblib) was pickled with
+# scikit-learn 1.6.1. sklearn warns on version mismatch at unpickle time; the
+# loader captures that warning and functionally smoke-tests the estimator, so
+# any 1.6+ runtime that passes the smoke test is acceptable.
+scikit-learn>=1.6,<1.9
 numpy>=2.1
 joblib>=1.4
 shap==0.48.0
@@ -16,4 +20,8 @@ torch==2.14.0+cpu
 transformers==4.57.1
 tokenizers>=0.22
 sentencepiece>=0.2
+# PostgreSQL driver for SQLAlchemy persistence (Phase 6/9). SQLite needs none.
+psycopg[binary]>=3.2,<4
+# ORM for privacy-first persistence (Phase 6).
+SQLAlchemy>=2.0,<3
 pytest==9.1.1

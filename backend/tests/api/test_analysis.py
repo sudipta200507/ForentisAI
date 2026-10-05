@@ -34,13 +34,18 @@ def test_valid_eml_returns_combined_evidence(client: TestClient, fake_rspamd) ->
 
     assert response.status_code == 200
     payload = response.json()
-    # Step 5 adds the ``ai`` section (model evidence) to the Step 1-4 response.
+    # Step 5 adds ``ai`` (model evidence); Phases 3/5/5A add ``analysis_id``,
+    # ``risk`` (risk engine), ``forensics`` (transport path), ``metadata``.
     assert set(payload) == {
         "schema_version",
+        "analysis_id",
         "email",
         "authentication",
         "intelligence",
         "ai",
+        "risk",
+        "forensics",
+        "metadata",
     }
 
     email = payload["email"]
@@ -203,13 +208,13 @@ def test_no_risk_score_or_verdict_fields_in_success_response(
     payload = response.json()
     # Step 5 note: model ``confidence`` values inside the ``ai`` section are
     # legitimate model evidence (Phase B contract). A FINAL project risk
-    # score, threat verdict, or AI-prediction verdict field still must not
-    # exist anywhere in the response.
-    for section_name, section in payload.items():
-        if not isinstance(section, dict):
-            continue
-        if section_name == "ai":
-            continue  # checked separately below
+    # score, threat verdict, or AI-prediction verdict field must not exist
+    # inside the EVIDENCE sections. The Phase 3 risk engine legitimately
+    # owns ``risk`` (its own top-level section), and Phase 5A owns
+    # ``forensics``; those are checked in test_product_response.py.
+    evidence_sections = ("email", "authentication", "intelligence")
+    for section_name in evidence_sections:
+        section = payload[section_name]
         for forbidden_key in (
             "risk_score",
             "riskscore",
