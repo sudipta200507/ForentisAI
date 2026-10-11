@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # ForentisAI
 
 **AI-powered email threat detection and forensic intelligence platform.**
@@ -226,6 +225,3 @@ when their dependencies are unavailable.
 ## License
 
 Released under the [MIT License](LICENSE).
-=======
-# ForentisAI
->>>>>>> origin/main
