@@ -50,6 +50,28 @@ export function listAnalyses(limit = 50) {
   return request(`/analyses?limit=${encodeURIComponent(limit)}`);
 }
 
+/**
+ * Health probes for the dashboard status line.
+ * `/health` is API liveness; `/health/rspamd` is dependency availability.
+ * Returns { api: bool, rspamd: bool | null }.
+ */
+export async function getHealth() {
+  const status = { api: false, rspamd: null };
+  try {
+    await request("/health");
+    status.api = true;
+  } catch (_) {
+    return status;
+  }
+  try {
+    const rspamd = await request("/health/rspamd");
+    status.rspamd = rspamd.rspamd_available === true;
+  } catch (_) {
+    status.rspamd = null; // dependency probe failed; leave unknown
+  }
+  return status;
+}
+
 export function getAnalysis(analysisId) {
   return request(`/analyses/${encodeURIComponent(analysisId)}`);
 }

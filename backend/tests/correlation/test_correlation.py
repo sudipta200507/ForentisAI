@@ -18,6 +18,8 @@ from app.database.session import reset_engine_cache
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SAMPLE_PATH = PROJECT_ROOT / "samples" / "safe" / "step1_synthetic.eml"
 
+from fake_rspamd import install_fake_rspamd  # noqa: E402 - shared helper
+
 
 @pytest.fixture()
 def seeded(monkeypatch, tmp_path):
@@ -28,7 +30,11 @@ def seeded(monkeypatch, tmp_path):
 
     from app.main import create_app
 
-    with TestClient(create_app()) as client:
+    app = create_app()
+    # A dependency override on the module-level app does not apply to a fresh
+    # instance; install the deterministic fake on the app we actually serve.
+    install_fake_rspamd(app)
+    with TestClient(app) as client:
         response = client.post(
             "/analyze-email",
             files={"upload": ("seed.eml", SAMPLE_PATH.read_bytes(), "message/rfc822")},

@@ -34,6 +34,8 @@ from app.extractor.unicode_safety import (
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SAMPLE_PATH = PROJECT_ROOT / "samples" / "phishing" / "sample-1.eml"
 
+from fake_rspamd import install_fake_rspamd  # noqa: E402 - shared helper
+
 
 def _surrogate_evidence_bytes() -> bytes:
     """Self-contained invalid-byte fixture (bare 0x80 continuation bytes).
@@ -223,7 +225,11 @@ def surrogate_api(monkeypatch, tmp_path):
     reset_engine_cache()
     from app.main import create_app
 
-    with TestClient(create_app()) as client:
+    app = create_app()
+    # A dependency override on the module-level app does not apply to a fresh
+    # instance; install the deterministic fake on the app we actually serve.
+    install_fake_rspamd(app)
+    with TestClient(app) as client:
         yield client
 
 

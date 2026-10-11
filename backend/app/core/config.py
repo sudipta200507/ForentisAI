@@ -297,7 +297,12 @@ class SecuritySettings:
 
     api_keys: tuple[str, ...] = ()
     environment: str = "local"
-    rate_limit_requests: int = 60
+    # 600 requests/minute per identity: the anonymous local-development
+    # default. It comfortably covers a real analyst session and the test
+    # suite (many share one identity over a multi-minute run), while still
+    # bounding a runaway client. Configure API_RATE_LIMIT_REQUESTS /
+    # API_RATE_LIMIT_WINDOW_SECONDS explicitly for production needs.
+    rate_limit_requests: int = 600
     rate_limit_window_seconds: float = 60.0
 
 
@@ -315,7 +320,7 @@ def load_security_settings() -> "SecuritySettings":
         api_keys=keys,
         environment=environment,
         rate_limit_requests=max(
-            1, _env_int("API_RATE_LIMIT_REQUESTS", 60)
+            1, _env_int("API_RATE_LIMIT_REQUESTS", 600)
         ),
         rate_limit_window_seconds=max(
             0.1,

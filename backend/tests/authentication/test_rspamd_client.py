@@ -298,16 +298,27 @@ def test_dmarc_pass_is_normalized() -> None:
 
 
 @pytest.mark.parametrize(
-    ("symbol_name", "expected"),
+    ("symbol_name", "expected_result", "expected_policy"),
     [
-        ("DMARC_POLICY_REJECT", "reject"),
-        ("DMARC_POLICY_QUARANTINE", "quarantine"),
-        ("DMARC_POLICY_SOFTFAIL", "fail"),
-        ("DMARC_NA", "none"),
+        # REJECT/QUARANTINE are dispositions of a FAILED evaluation: the
+        # authentication result is always "fail"; the published policy is
+        # preserved separately for forensic context.
+        ("DMARC_POLICY_REJECT", "fail", "reject"),
+        ("DMARC_POLICY_QUARANTINE", "fail", "quarantine"),
+        # SOFTFAIL: authentication failed, Rspamd suggests no action (p=none).
+        ("DMARC_POLICY_SOFTFAIL", "fail", "none"),
+        # No DMARC record at all.
+        ("DMARC_NA", "none", "none"),
+        # A pass carries no reported policy value (never fabricated as "none").
+        ("DMARC_POLICY_ALLOW", "pass", None),
     ],
 )
-def test_dmarc_results_map_to_policy_vocabulary(symbol_name: str, expected: str) -> None:
-    assert normalize_dmarc(_analysis({symbol_name: RspamdSymbol()})).result == expected
+def test_dmarc_results_map_to_authentication_vocabulary(
+    symbol_name: str, expected_result: str, expected_policy: str | None
+) -> None:
+    evidence = normalize_dmarc(_analysis({symbol_name: RspamdSymbol()}))
+    assert evidence.result == expected_result
+    assert evidence.policy == expected_policy
 
 
 def test_dmarc_alignment_stays_none_when_not_reported() -> None:

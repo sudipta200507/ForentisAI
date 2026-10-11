@@ -36,6 +36,12 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_live_end_to_end_analysis() -> None:
+    # Defense in depth: this test's purpose is the REAL Rspamd path, so any
+    # leftover fake override from another module would invalidate it silently.
+    from app.api import dependencies
+
+    fastapi_app.dependency_overrides.pop(dependencies.get_rspamd_client, None)
+
     raw_email = SAMPLE_PATH.read_bytes()
     original = bytes(raw_email)
 

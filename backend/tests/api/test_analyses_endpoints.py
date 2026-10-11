@@ -9,8 +9,22 @@ from fastapi.testclient import TestClient
 
 from app.database.session import reset_engine_cache
 
+from fake_rspamd import install_fake_rspamd  # noqa: E402 - shared helper
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SAMPLE_PATH = PROJECT_ROOT / "samples" / "safe" / "step1_synthetic.eml"
+
+
+def _fresh_client():
+    """create_app() + the deterministic fake Rspamd client (Docker-free)."""
+
+    from app.main import create_app
+
+    app = create_app()
+    # A dependency override on the module-level app does not apply to a fresh
+    # instance; install the fake on the app this client will actually serve.
+    install_fake_rspamd(app)
+    return TestClient(app)
 
 
 @pytest.fixture()
@@ -23,6 +37,7 @@ def seeded_analysis(monkeypatch, tmp_path):
     from app.main import create_app
 
     app = create_app()
+    install_fake_rspamd(app)
     with TestClient(app) as client:
         response = client.post(
             "/analyze-email",
@@ -39,9 +54,7 @@ def seeded_analysis(monkeypatch, tmp_path):
 
 
 def test_list_analyses_returns_seeded_record(seeded_analysis):
-    from app.main import create_app
-
-    with TestClient(create_app()) as client:
+    with _fresh_client() as client:
         rows = client.get("/analyses").json()
     assert isinstance(rows, list)
     assert len(rows) >= 1
@@ -54,25 +67,19 @@ def test_list_analyses_returns_seeded_record(seeded_analysis):
 
 
 def test_list_analyses_respects_limit(seeded_analysis):
-    from app.main import create_app
-
-    with TestClient(create_app()) as client:
+    with _fresh_client() as client:
         rows = client.get("/analyses", params={"limit": 1}).json()
     assert len(rows) <= 1
 
 
 def test_list_analyses_rejects_bad_limit():
-    from app.main import create_app
-
-    with TestClient(create_app()) as client:
+    with _fresh_client() as client:
         assert client.get("/analyses", params={"limit": 0}).status_code == 422
         assert client.get("/analyses", params={"limit": 500}).status_code == 422
 
 
 def test_get_analysis_detail(seeded_analysis):
-    from app.main import create_app
-
-    with TestClient(create_app()) as client:
+    with _fresh_client() as client:
         detail = client.get(f"/analyses/{seeded_analysis['analysis_id']}").json()
 
     assert detail["analysis_id"] == seeded_analysis["analysis_id"]
@@ -89,9 +96,7 @@ def test_get_analysis_detail(seeded_analysis):
 
 
 def test_get_analysis_not_found():
-    from app.main import create_app
-
-    with TestClient(create_app()) as client:
+    with _fresh_client() as client:
         response = client.get("/analyses/00000000-0000-5000-8000-000000000000")
     assert response.status_code == 404
     body = response.json()
@@ -99,8 +104,6 @@ def test_get_analysis_not_found():
 
 
 def test_get_analysis_rejects_malformed_id():
-    from app.main import create_app
-
-    with TestClient(create_app()) as client:
+    with _fresh_client() as client:
         response = client.get("/analyses/not%20a%20uuid%20with%20slashes/../etc")
     assert response.status_code in (404, 400)

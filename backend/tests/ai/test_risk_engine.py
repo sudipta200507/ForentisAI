@@ -120,7 +120,7 @@ def test_risk_score_is_bounded():
             body_text="verify your password urgent wire transfer invoice now",
         ),
         _ai(nlp_susp=1.0, tech_susp=1.0),
-        _auth(spf="fail", dkim="fail", dmarc="reject"),
+        _auth(spf="fail", dkim="fail", dmarc="fail"),
         intelligence_with_domain_ages([5.0]),
     )
     assert 0.0 <= risk.risk_score <= 100.0
@@ -137,7 +137,7 @@ def test_model_probability_is_distinct_from_risk_score():
     """A p=1.0 model with zero corroboration must NOT score 100."""
 
     risk = assess_risk(_evidence(), _ai(nlp_susp=1.0), None)
-    # 20 (NLP) + 10 (fusion) = 30 points max from a single model source.
+    # NLP alone contributes 30 of its 45-point model budget.
     assert risk.risk_score < 45.0
     assert risk.verdict == "benign"
     # The raw probability is reported separately.
@@ -145,7 +145,14 @@ def test_model_probability_is_distinct_from_risk_score():
         c for c in risk.model_contributions if c.component == "nlp"
     )
     assert nlp_contribution.suspicious_probability == 1.0
-    assert nlp_contribution.points == 20.0
+    assert nlp_contribution.points == 30.0
+    # Fusion evidence is counted once (through its components): no points.
+    fusion_contribution = next(
+        c for c in risk.model_contributions if c.component == "fusion"
+    )
+    assert fusion_contribution.available is True
+    assert fusion_contribution.points == 0.0
+    assert fusion_contribution.suspicious_probability == pytest.approx(1.0)
 
 
 def test_both_models_at_max_without_corroboration_stay_suspicious():
@@ -168,17 +175,19 @@ def test_suspicious_threshold_boundary():
 
 
 def test_malicious_threshold_boundary():
-    # 45 model + 21 auth (10+6+5) + 6 reply-to + 2 urgency + 1 date = 75.
+    # 45 model + 19 auth (8 DMARC-fail + 6 SPF + 5 DKIM) + 6 reply-to
+    # + 3 return-path + 2 urgency + 1 date = 76 >= 75.
     risk = assess_risk(
         _evidence(
             reply_to=["boss@evil.example"],
+            return_path="<bounce@evil.example>",
             date=None,
             body_text="urgent action required",
         ),
         _ai(nlp_susp=1.0, tech_susp=1.0),
-        _auth(spf="fail", dkim="fail", dmarc="reject"),
+        _auth(spf="fail", dkim="fail", dmarc="fail"),
     )
-    assert risk.risk_score == 75.0
+    assert risk.risk_score == 76.0
     assert risk.verdict == "malicious"
     assert risk.severity == "high"
 
@@ -200,10 +209,22 @@ def test_dmarc_fail_scores():
     assert risk.risk_score == 8.0
 
 
-def test_dmarc_reject_outweighs_fail():
+def test_dmarc_result_string_scores_as_failure_regardless_of_legacy_value():
+    """Any failed DMARC evaluation scores equally; policy is context only.
+
+    "fail" is the canonical result. The legacy strings "reject" and
+    "quarantine" (produced by earlier versions that recorded the policy
+    disposition as the result) score the same: they represent failures.
+    """
+
     reject = assess_risk(_evidence(), _ai(), _auth(dmarc="reject"))
+    quarantine = assess_risk(_evidence(), _ai(), _auth(dmarc="quarantine"))
     fail = assess_risk(_evidence(), _ai(), _auth(dmarc="fail"))
-    assert reject.risk_score > fail.risk_score
+    assert reject.risk_score == quarantine.risk_score == fail.risk_score == 8.0
+    assert all(
+        any(s.name == "dmarc_failure" for s in r.contributing_signals)
+        for r in (reject, quarantine, fail)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +370,7 @@ def test_no_attacker_attribution_language():
     risk = assess_risk(
         _evidence(),
         _ai(nlp_susp=0.9, tech_susp=0.9),
-        _auth(spf="fail", dkim="fail", dmarc="reject"),
+        _auth(spf="fail", dkim="fail", dmarc="fail"),
         intelligence_with_domain_ages([5.0]),
     )
     blob = " ".join(risk.reasons + risk.limitations + [s.detail for s in risk.contributing_signals]).lower()

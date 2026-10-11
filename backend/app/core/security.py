@@ -35,7 +35,7 @@ class SecuritySettings:
 
     api_keys: tuple[str, ...] = ()
     environment: str = "local"
-    rate_limit_requests: int = 60
+    rate_limit_requests: int = 600
     rate_limit_window_seconds: float = 60.0
 
     @property
@@ -101,7 +101,7 @@ class SecurityState:
     """Process-wide security state (limiter instance)."""
 
     limiter: SlidingWindowRateLimiter = field(
-        default_factory=lambda: SlidingWindowRateLimiter(60, 60.0)
+        default_factory=lambda: SlidingWindowRateLimiter(600, 60.0)
     )
 
 

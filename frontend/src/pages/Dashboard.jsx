@@ -1,10 +1,16 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { listAnalyses } from "../services/api.js";
+import { getHealth, listAnalyses } from "../services/api.js";
 
+/**
+ * Dashboard: aggregate view over the PERSISTED derived records only.
+ * The database intentionally stores no raw email content, so this page
+ * shows counts, verdict distribution and model/service status.
+ */
 export default function Dashboard() {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState(null);
+  const [health, setHealth] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -15,6 +21,13 @@ export default function Dashboard() {
       .catch((err) => {
         if (!cancelled) setError(err.message);
       });
+    getHealth()
+      .then((data) => {
+        if (!cancelled) setHealth(data);
+      })
+      .catch(() => {
+        /* health errors surface as degraded status, not a page error */
+      });
     return () => {
       cancelled = true;
     };
@@ -23,13 +36,49 @@ export default function Dashboard() {
   if (error) return <div className="empty error-text">{error}</div>;
   if (!rows) return <div className="empty">Loading stored analyses…</div>;
 
+  const stats = summarize(rows);
+
   return (
     <section>
-      <h1>Recent analyses</h1>
+      <h1>Dashboard</h1>
+
+      <div className="stat-grid">
+        <Stat label="Stored analyses" value={stats.total} />
+        <Stat label="Malicious" value={stats.malicious} tone="malicious" />
+        <Stat label="Suspicious" value={stats.suspicious} tone="suspicious" />
+        <Stat label="Benign" value={stats.benign} tone="benign" />
+        <Stat label="Inconclusive" value={stats.inconclusive} tone="muted" />
+      </div>
+
+      <div className={`health-line ${health && health.api ? "" : "muted"}`}>
+        <span
+          className={`health-dot health-${health && health.api ? "ok" : "down"}`}
+          aria-hidden="true"
+        />
+        {health && health.api
+          ? `Backend online${
+              health.rspamd === true
+                ? " · Rspamd available"
+                : health.rspamd === false
+                  ? " · Rspamd unavailable"
+                  : ""
+            }`
+          : "Backend unreachable — is the API running?"}
+      </div>
+
+      <h2 className="table-title">Recent analyses</h2>
       {rows.length === 0 ? (
         <div className="empty">
-          No stored analyses yet. Upload a .eml on the <Link to="/analysis">Analyze
-          email</Link> page (persistence enabled) and it will appear here.
+          <p>
+            <strong>No stored analyses yet.</strong>
+          </p>
+          <p>
+            Upload a <span className="mono">.eml</span> file on the{" "}
+            <Link to="/analysis">Analyze email</Link> page to run the full
+            pipeline: extraction, SPF/DKIM/DMARC authentication, DNS/RDAP
+            intelligence, AI models and risk scoring. Sample messages live in{" "}
+            <span className="mono">samples/</span> in the repository.
+          </p>
         </div>
       ) : (
         <table className="table">
@@ -53,7 +102,7 @@ export default function Dashboard() {
                 <td className="mono">{row.filename}</td>
                 <td>{row.sender_domain || "—"}</td>
                 <td>
-                  <span className={`score score-${band(row.risk_score)}`}>
+                  <span className={`score score-${verdictBand(row.risk_score)}`}>
                     {row.risk_score.toFixed(0)}
                   </span>
                 </td>
@@ -77,10 +126,28 @@ export default function Dashboard() {
   );
 }
 
-function band(score) {
-  if (score >= 70) return "high";
-  if (score >= 40) return "medium";
+function summarize(rows) {
+  const counts = { malicious: 0, suspicious: 0, benign: 0, inconclusive: 0 };
+  for (const row of rows) {
+    if (row.verdict in counts) counts[row.verdict] += 1;
+  }
+  return { total: rows.length, ...counts };
+}
+
+/** Verdict bands mirror the documented risk-engine thresholds (45/75). */
+function verdictBand(score) {
+  if (score >= 75) return "high";
+  if (score >= 45) return "medium";
   return "low";
+}
+
+function Stat({ label, value, tone }) {
+  return (
+    <div className="stat">
+      <span className={`stat-value ${tone ? `score-${tone}` : ""}`}>{value}</span>
+      <span className="stat-label">{label}</span>
+    </div>
+  );
 }
 
 function formatDate(value) {

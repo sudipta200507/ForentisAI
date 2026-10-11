@@ -8,13 +8,21 @@ METHOD (V1, documented and versioned):
 
     risk_score = min(100, Σ signal points)
 
-    Model evidence (max 45 points):
-        NLP suspicious probability          × 20
+    Model evidence (max 45 points) — each model counted EXACTLY ONCE:
+        NLP suspicious probability          × 30
         Technical-ML suspicious probability × 15
-        Fused suspicious probability        × 10
 
-    Authentication evidence (max 21 points):
-        DMARC reject         → 10      quarantine → 8      fail → 8
+        Fusion is the weighted mean of those two components, so it is
+        reported in ``model_contributions`` for transparency but adds NO
+        points of its own. The same model evidence is therefore never
+        counted twice. (V1 previously added NLP×20 + technical×15 +
+        fusion×10, which weighted the shared evidence two to three times.)
+
+    Authentication evidence (max 19 points):
+        DMARC failed evaluation → 8 (a PUBLISHED policy such as p=quarantine
+          or p=reject is forensic context only and never scores by itself;
+          legacy persisted result strings "reject"/"quarantine" are treated
+          as the failures they represent)
         SPF fail → 6   SPF softfail → 3
         DKIM fail → 5
         (PASS never scores: authentication is one evidence source and a
@@ -64,8 +72,8 @@ CONFIDENCE (evidence-corroboration based, never single-signal based):
     Missing critical evidence therefore LOWERS confidence by construction.
 
 Design rules:
-- risk_score and model probabilities are DISTINCT concepts (a p=1.0 model
-  with no corroboration scores 45, not 100);
+- risk_score and model probabilities are DISTINCT concepts (models at p=1.0
+  with no corroboration score at most 45, not 100);
 - the engine is a pure, total function: no network, no clock (domain age
   comes pre-computed relative to the email date from the feature layer),
   identical inputs → identical assessment;
@@ -95,12 +103,10 @@ from app.schemas.risk import (
 # Documented weight tables (V1).
 # ---------------------------------------------------------------------------
 
-_WEIGHT_NLP = 20.0
+_WEIGHT_NLP = 30.0
 _WEIGHT_TECHNICAL = 15.0
-_WEIGHT_FUSION = 10.0
 
-_DMARC_REJECT_POINTS = 10.0
-_DMARC_QUARANTINE_OR_FAIL_POINTS = 8.0
+_DMARC_FAIL_POINTS = 8.0
 _SPF_FAIL_POINTS = 6.0
 _SPF_SOFTFAIL_POINTS = 3.0
 _DKIM_FAIL_POINTS = 5.0
@@ -168,6 +174,14 @@ def _suspicious_probability(probabilities: dict[str, float]) -> float | None:
 def _model_signals(
     ai: AIAnalysis,
 ) -> tuple[float, list[ContributingSignal], list[ModelContribution]]:
+    """Score model evidence exactly once.
+
+    NLP and technical-ML probabilities each carry points; fusion is their
+    weighted mean and therefore adds none (see module docstring). Fusion is
+    still reported in ``model_contributions`` so the output stays fully
+    transparent about every component's availability and probability.
+    """
+
     points = 0.0
     signals: list[ContributingSignal] = []
     contributions: list[ModelContribution] = []
@@ -185,7 +199,6 @@ def _model_signals(
     for component, available, probability, weight in (
         ("nlp", ai.nlp.available, nlp_p, _WEIGHT_NLP),
         ("technical_ml", ai.technical_ml.available, tech_p, _WEIGHT_TECHNICAL),
-        ("fusion", ai.fusion.available, fusion_p, _WEIGHT_FUSION),
     ):
         component_points = round(weight * probability, 4) if probability is not None else 0.0
         points += component_points
@@ -194,14 +207,10 @@ def _model_signals(
                 detail = (
                     f"nlp.suspicious_probability={probability:.3f} × weight {weight:g}"
                 )
-            elif component == "technical_ml":
+            else:
                 detail = (
                     f"technical_ml.suspicious_probability={probability:.3f} "
                     f"× weight {weight:g}"
-                )
-            else:
-                detail = (
-                    f"fusion.suspicious_probability={probability:.3f} × weight {weight:g}"
                 )
             signals.append(
                 ContributingSignal(
@@ -222,6 +231,25 @@ def _model_signals(
             )
         )
 
+    # Fusion: reported for transparency, deliberately worth zero points —
+    # it is the weighted mean of the two components already scored above,
+    # so scoring it again would count the same evidence twice.
+    contributions.append(
+        ModelContribution(
+            component="fusion",
+            available=ai.fusion.available,
+            suspicious_probability=fusion_p,
+            points=0.0,
+            note=(
+                "fusion is the weighted mean of nlp and technical_ml; its "
+                "evidence is counted once through those components and adds "
+                "no separate points"
+                if ai.fusion.available
+                else "model unavailable; contributed no points"
+            ),
+        )
+    )
+
     return points, signals, contributions
 
 
@@ -235,19 +263,19 @@ def _authentication_signals(
 
     dmarc = authentication.dmarc
     if dmarc.available == "available":
-        dmarc_points = 0.0
-        if dmarc.result == "reject":
-            dmarc_points = _DMARC_REJECT_POINTS
-        elif dmarc.result in {"quarantine", "fail"}:
-            dmarc_points = _DMARC_QUARANTINE_OR_FAIL_POINTS
-        if dmarc_points:
-            points += dmarc_points
+        # Only an actual failed DMARC evaluation scores. A published policy
+        # (p=quarantine / p=reject) is forensic context and never scores by
+        # itself. Legacy persisted result strings "reject"/"quarantine" —
+        # produced by earlier versions that conflated disposition with
+        # result — are treated as the failures they represent.
+        if dmarc.result in {"fail", "reject", "quarantine"}:
+            points += _DMARC_FAIL_POINTS
             signals.append(
                 ContributingSignal(
                     name="dmarc_failure",
                     category="authentication_failure",
                     source="authentication",
-                    points=dmarc_points,
+                    points=_DMARC_FAIL_POINTS,
                     detail=f"dmarc_result={dmarc.result}; policy={dmarc.policy or 'unknown'}",
                 )
             )

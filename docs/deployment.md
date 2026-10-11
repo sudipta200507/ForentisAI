@@ -137,9 +137,11 @@ Secrets are only ever read from the environment and are never logged.
 - [ ] Retention policy (`FORENTISAI_RETENTION_DAYS`) matched to policy.
 - [ ] Logs reviewed: they must contain no email content, credentials, or keys.
 
-## 6. Platform deployment files
+## 6. Hosting platforms
 
-`infrastructure/deployment/render.yaml` and `infrastructure/deployment/vercel.json`
-are starting points for hosted frontend/backend deployments. They must be
-adapted to the artifact strategy and secret management of the target
-platform before use.
+No vendor-specific deployment manifests (Render, Vercel, etc.) are checked in:
+the Docker image and `docker-compose.yml` are the supported deployment units,
+and platform configuration depends on how model artifacts and secrets are
+managed by the target host. When deploying to a hosted platform, configure
+mounting of the model artifacts and the environment variables listed in
+section 5 at the platform level.

@@ -41,13 +41,21 @@ export function RiskCard({ risk, stored = false }) {
 
 export function AuthCard({ authentication }) {
   if (!authentication) return null;
+  const dmarc = authentication.dmarc || {};
   return (
     <div className="card">
       <h2>Authentication</h2>
       <Row k="SPF" v={protocolValue(authentication.spf)} cls={protocolClass(authentication.spf)} />
       <Row k="DKIM" v={protocolValue(authentication.dkim)} cls={protocolClass(authentication.dkim)} />
       <Row k="DMARC" v={protocolValue(authentication.dmarc)} cls={protocolClass(authentication.dmarc)} />
-      <p className="hint">A passing protocol is not a safety guarantee.</p>
+      {dmarc.available === "available" && dmarc.policy && (
+        <Row k="DMARC policy (sender domain)" v={`p=${dmarc.policy}`} cls="muted" />
+      )}
+      <p className="hint">
+        A passing protocol is not a safety guarantee. The published DMARC
+        policy (p=) is the sender domain's rule for failing mail — it is
+        forensic context, not this message's authentication result.
+      </p>
     </div>
   );
 }
@@ -188,9 +196,10 @@ function protocolClass(protocol) {
   return "muted";
 }
 
+/** Verdict bands mirror the documented risk-engine thresholds (45/75). */
 function band(score) {
-  if (score >= 70) return "high";
-  if (score >= 40) return "medium";
+  if (score >= 75) return "high";
+  if (score >= 45) return "medium";
   return "low";
 }
 

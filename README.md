@@ -1,519 +1,227 @@
-# SIH 2026 Project
-## AI-Powered Email Threat Detection, Geolocation and Forensic Intelligence Platform
+# ForentisAI
 
+**AI-powered email threat detection and forensic intelligence platform.**
+Upload an email (`.eml`) and get back evidence-based analysis: header
+forensics, SPF/DKIM/DMARC authentication, DNS/RDAP infrastructure
+intelligence, two AI models (DeBERTa-v3 NLP + technical RandomForest),
+explainable fusion, and a deterministic, documented risk assessment.
 
-## Step 5 — AI/ML Threat Analysis
+Built for Smart India Hackathon 2026 (problem statement SIH26106).
 
-Step 5 adds an AI layer that consumes the Step 1–4 evidence and produces
-structured **model evidence** — never a final verdict, risk score, or
-severity value. Those belong to later phases.
+---
+
+## What it does
 
 ```text
-EmailEvidence + AuthenticationEvidence + IntelligenceEvidence
-      │
-      ▼
-Feature extraction (backend/app/features/, 48 deterministic features)
-      │
-      ├────────────────┬──────────────────────┐
-      ▼                                       ▼
-Technical ML (scikit-learn)          NLP (DeBERTa-v3, fine-tuned)
-RandomForest over features           local inference on prepared text
-      │                                       │
-      └────────────────┬──────────────────────┘
-                       ▼
-               Fusion (deterministic weighted mean)
-                       │
-                       ▼
-     Explainability (SHAP for the technical model;
-     textual model signals for both)
-                       │
-                       ▼
-                 AIAnalysis (model evidence only)
+                ┌──────────────────────────────────────────────────┐
+ .eml upload ──►│  Step 1  Extraction        → EmailEvidence      │
+ (bytes kept    │  Step 2  Rspamd auth       → AuthenticationEvidence
+  intact)       │  Step 4  DNS/RDAP/GeoIP    → IntelligenceEvidence│
+                │  Step 5  DeBERTa + RF +    → AIAnalysis          │
+                │          fusion + SHAP                           │
+                │  Step 3  Risk engine       → RiskAssessment      │
+                │  Reports (JSON/HTML)       → forensic report     │
+                └──────────────────────────────────────────────────┘
 ```
 
-### Implementation status (read this before trusting any number)
+- **Extraction** — safe `.eml` parsing to derived JSON; original bytes are
+  never modified, executed, or persisted.
+- **Authentication** — Rspamd (Docker) scans the message; SPF/DKIM/DMARC
+  results are normalized with authentication **result** and published
+  **policy** kept as separate concepts (a domain publishing `p=quarantine`
+  never makes a passing message fail).
+- **Intelligence** — validated indicator extraction, bounded DNS/RDAP
+  lookups, optional local MaxMind GeoIP. URLs are parsed, never visited.
+- **AI models** — a fine-tuned DeBERTa-v3 artifact and a RandomForest over a
+  28-feature contract, fused by a documented weighted mean, explained via
+  SHAP and structured evidence rules. Model failures are explicit states,
+  never silent benign guesses.
+- **Risk engine** — deterministic, fully documented point system (see below).
+- **Persistence & reports** — privacy-safe derived records in PostgreSQL
+  (SQLite fallback for local dev); JSON/HTML forensic reports.
 
-| Component | Status |
-| --- | --- |
-| Feature pipeline | **Implemented** and deterministic |
-| Technical ML (RandomForest) | **Implemented**; trained **only on a synthetic pipeline-validation fixture** — not a production model |
-| DeBERTa-v3 NLP | **Implemented with the fine-tuned ForentisAI artifact** (`forentisai_deberta_v3`, 184,423,682 parameters, trained from `microsoft/deberta-v3-base`). Loaded strictly locally; the backend refuses any artifact without the official `forentisai_model.json` manifest |
-| Fusion | **Implemented** (documented weighted mean) |
-| Explainability | **Implemented** (SHAP TreeExplainer; linear fallback; graceful degradation) |
-| Production validation | **Pending**: independent evaluation on REAL emails is still required — see `ai/datasets/README.md` |
+## What it does NOT do
 
-**Evaluation honesty:** the NLP artifact was trained on
-`ForentisAI_DeBERTa_Dataset_V2`, which is a **synthetic** dataset. Its
-held-out V2 test metrics (accuracy/precision/recall/F1/ROC-AUC = 1.000 on
-4,499 synthetic samples) are **synthetic-dataset metrics only**. They do
-**not** establish real-world deployment performance, and no
-"100% accurate phishing detector" claim may be made. Independent
-real-email evaluation is still required before any production claim.
+Read this before trusting any number:
 
-### Feature pipeline (`backend/app/features/`)
+- Model artifacts were trained on **synthetic datasets**. The reported
+  metrics are synthetic-corpus metrics only and establish **no real-world
+  performance**. Independent evaluation on real email is still required.
+- A model prediction, an authentication `pass`, or a risk score is
+  **evidence, never a final security verdict**. The platform never claims an
+  email is definitively malicious or safe.
+- No URL fetching, no attachment execution, no email content sent to
+  external services, no attacker attribution.
+- GeoIP requires a local MaxMind database; without one the module reports
+  `not_configured` instead of guessing.
 
-48 features with stable dotted names (contract:
-`app.schemas.features.feature_names()`):
+## Repository layout
 
-- `text.*` — subject/body lengths, HTML presence, credential/payment/urgency
-  keyword counts (pattern signals, not verdicts);
-- `header.*` — Received hop count, parser defects, sender/Reply-To /
-  Return-Path / Message-ID domain mismatches (flagged only when both sides
-  are determinable);
-- `auth.*` — one-hot SPF/DKIM/DMARC results (all-zero = unknown, never
-  guessed), Rspamd score as a Step 2 signal;
-- `url.*` — URL counts, HTTPS ratio, IP-literal URLs, suspicious ports,
-  registered-domain mismatches (reuses Step 4 decomposition when present);
-- `intelligence.*` — public/non-public IP counts, DNS/RDAP/GeoIP outcome
-  counts, youngest RDAP domain age (sentinel `-1.0` = not determinable).
+```text
+backend/       FastAPI application, AI modules, tests (pytest)
+frontend/      React + Vite operator dashboard
+extension/     Chrome MV3 extension (Gmail + side panel)
+ai/            model artifacts (Git LFS) and training scripts
+samples/       .eml fixtures used by tests and manual runs
+scripts/       dev utilities (fixture builder, icon generator)
+infrastructure/  Dockerfiles + docker-compose note
+docs/          architecture, API, deployment, security documentation
+```
 
-Extraction is local-only, deterministic, exception-isolated per section, and
-performs **no network requests**. Raw email text never crosses the feature
-boundary — only numbers.
+## Quick start
 
-### Technical ML (`backend/app/ai/technical_ml/`)
+Prerequisites: **Python 3.11+**, **Node 18+**, **Docker Desktop**,
+**Git LFS** (model artifacts are stored in LFS — install it *before*
+cloning, then `git lfs pull` if files show as pointers).
 
-`RandomForestClassifier` (200 trees, fixed seed, `n_jobs=1`) chosen because
-the mixed-scale features need no preprocessing, interactions matter, and
-feature importances give an honest fallback explanation. The artifact is a
-custom bundle recording the exact feature contract; loading an artifact
-trained against a different contract is a controlled `incompatible_model`
-state, never a wrong prediction.
-
-### DeBERTa-v3 NLP (`backend/app/ai/nlp/`)
-
-Text preparation (subject + plain body, or subject + locally normalized
-HTML-derived text, bounded to `AI_MAX_TEXT_LENGTH`), local inference with
-`local_files_only=True` (never downloads at request time), and deterministic
-keyword-pattern indicators (urgency, credential request, payment request,
-authority claims, BEC-style requests, …) phrased as **model indicators**,
-never "confirmed" findings.
-
-The trained model's raw classes are `0 = benign`, `1 = malicious`. The
-backend intentionally exposes the second class as **"suspicious"**, because
-a model prediction is model evidence, not a final security verdict — the
-raw label "malicious" is never surfaced as a verdict. The DeBERTa
-probability alone decides the predicted class; keyword indicators are
-supplementary signals and do not claim to explain the transformer's
-internal reasoning.
-
-### Fusion (`backend/app/ai/fusion/`)
-
-`p_fused(suspicious) = Σ wᵢ·pᵢ / Σ wᵢ` over available components only
-(equal 0.5 default weights, renormalized when one is missing; threshold 0.5
-between model classes). Both unavailable → fusion `unavailable` (never a
-benign guess). Disagreement between components is surfaced as a note, not
-hidden.
-
-### Explainability (`backend/app/ai/explainability/`)
-
-SHAP `TreeExplainer` for the forest (relative to the suspicious class);
-documented coefficient×value fallback for linear models (SHAP marked
-unavailable there); explicit `unsupported_model` / `dependency_unavailable` /
-`explanation_failed` states. SHAP is deliberately **not** claimed for the
-transformer. Textual reasons are model signals, not verdicts.
-
-### Model loading & resource safety (Phase O)
-
-- Models load **once per artifact version** (path+size+mtime cache key) and
-  are reused across requests; load failures are cached too.
-- Retraining is picked up without a process restart.
-- No training or downloads at import time or API startup; inference never
-  downloads models.
-- Inference runs under `AI_INFERENCE_TIMEOUT_SECONDS` and degrades to an
-  explicit `inference_timeout` state.
-
-### Configuration (environment variables)
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `AI_ENABLED` | `true` | Master switch; `false` → explicit `not_enabled` states |
-| `AI_MODEL_DIR` | `ai/models` | Base directory for artifacts (relative paths resolve against the project root) |
-| `TECHNICAL_MODEL_PATH` | `$AI_MODEL_DIR/technical_model.joblib` | Technical artifact |
-| `NLP_MODEL_PATH` | `ai/models/nlp/forentisai_deberta_v3` | Fine-tuned ForentisAI artifact directory (relative paths resolve against the project root; missing/invalid artifact → explicit `unavailable`, never a download) |
-| `NLP_MODEL_NAME` | `microsoft/deberta-v3-base` | Base model the artifact was trained from (the base model itself is never used for prediction) |
-| `AI_MAX_TEXT_LENGTH` | `6000` | Character bound on prepared model text |
-| `AI_INFERENCE_TIMEOUT_SECONDS` | `20.0` | Per-model inference timeout |
-
-### API integration
-
-`POST /analyze-email` now returns `{schema_version, email, authentication,
-intelligence, ai}`. The `ai` section carries model evidence with explicit
-`available` / `unavailable` / `error` states. AI failures are isolated to
-the `ai` section and can never destroy Step 1–4 evidence. There is **no**
-`risk_score`, threat verdict, severity, or forensic report at this phase.
-
-### Training commands (from `backend/`, venv active)
+### 1. Backend
 
 ```bash
-# Technical model — synthetic pipeline-validation fixture (NOT production):
-python ../ai/training/generate_technical_fixture.py
-python ../ai/training/train_technical_model.py --use-fixture
-
-# Technical model — real dataset (default mode; refuses without one):
-python ../ai/training/train_technical_model.py --dataset ../ai/datasets/external/<dataset>.json
-
-# Transformer — requires a real labeled dataset (no fixture mode by design):
-python ../ai/training/train_transformer.py --dataset ../ai/datasets/external/<labeled_text>.json
+cd backend
+python -m venv .venv
+.venv/Scripts/activate          # Windows (Git Bash: source .venv/Scripts/activate)
+# Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-Artifacts land in `ai/models/` (git-ignored; large binaries are never
-committed). Dataset requirements and the honesty rules are documented in
-`ai/datasets/README.md`.
+> PyTorch note: on CPU-only machines you can install the CPU wheel first —
+> `pip install torch --index-url https://download.pytorch.org/whl/cpu` —
+> then `pip install -r requirements.txt`.
 
-### Step 5 limitations
-
-- **Real-world NLP performance is unproven.** The fine-tuned DeBERTa-v3
-  artifact was trained and evaluated on the synthetic
-  `ForentisAI_DeBERTa_Dataset_V2` (held-out V2 metrics: 1.000 across
-  accuracy/precision/recall/F1/ROC-AUC on 4,499 samples). These are
-  synthetic-dataset metrics only; independent real-email evaluation is
-  still required.
-- The technical RandomForest remains a synthetic pipeline-validation
-  fixture model, not a production model.
-- NLP keyword indicators are surface patterns; they complement — never
-  replace — the model probability, and they do not explain the
-  transformer's internal reasoning.
-- SHAP contributions are attributions relative to the model's suspicious
-  class, not evidence about the world.
-- The registered-domain heuristic is conservative (no Public Suffix List),
-  inherited from Step 4.
-- Fusion weights are fixed and equal; a learned or calibrated fusion belongs
-  to a later phase, together with real training data.
-
-### Step 5 safety boundary
-
-The AI layer never fetches URLs, never sends email content to any external
-API, never executes attachments or downloaded content, never logs raw email
-bodies/subjects/headers, and never turns a model failure into a benign
-prediction. Model evidence is an input for later risk-scoring and reporting
-phases — nothing in Step 5 decides whether an email is malicious or safe.
-
-## Step 4 — Intelligence & Enrichment
-
-Step 4 adds a modular infrastructure-intelligence layer on top of the
-Step 1 evidence. It produces **evidence only** — never a threat verdict,
-risk score, or confidence value:
-
-```text
-EmailEvidence (Step 1)
-    │
-    ├── IP extraction            (Received chain, validated)
-    ├── Domain extraction        (sender, Reply-To, Return-Path, headers)
-    └── URL parsing              (URLs already extracted by Step 1)
-             │
-             ▼
-      Intelligence layer (backend/app/intelligence/)
-             │
-     ┌───────┼────────┐
-     ▼       ▼        ▼
-    DNS     RDAP    GeoIP (only if configured)
-     │       │        │
-     └───────┼────────┘
-             ▼
-   IntelligenceEvidence (normalized JSON)
+```bash
+# start the API (http://127.0.0.1:8000, docs at /docs)
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-### Modules
+Without configuration the API runs with local defaults (SQLite persistence,
+models from `ai/models/`). Copy `.env.example` to `.env` to configure
+PostgreSQL, API keys, CORS, rate limits, and intelligence timeouts.
 
-| Module | Responsibility |
-| --- | --- |
-| `intelligence/indicator_extractor.py` | Validated extraction of candidate IPs (IPv4/IPv6), domains, and URL indicators from `EmailEvidence`, each with provenance (`IndicatorSource`) |
-| `intelligence/url_intelligence.py` | Parse-only URL decomposition: scheme, hostname, port, path, query, normalized hostname, conservative registered-domain guess. **URLs are never visited.** |
-| `intelligence/ip_intelligence.py` | Local IP normalization and classification (public / RFC1918-private / loopback / link-local / multicast / reserved) |
-| `intelligence/dns.py` | Bounded dnspython lookups (A, AAAA, MX, TXT, NS, CNAME) with explicit states |
-| `intelligence/rdap.py` | Domain registration metadata via RDAP (IANA bootstrap), privacy-safe subset |
-| `intelligence/geolocation.py` | MaxMind GeoLite2 lookups — active only when configured |
-| `intelligence/domain_intelligence.py` | Combines normalized domain + DNS + RDAP evidence |
-| `intelligence/orchestrator.py` | Composes everything into `IntelligenceEvidence`, per-run caps, graceful degradation |
+### 2. Rspamd (authentication analysis)
 
-### Lookup states (failure ≠ absence)
-
-Every external lookup reports an explicit status; a failed query is **never**
-reported as "no record":
-
-| Status | Meaning |
-| --- | --- |
-| `success` | The lookup answered and returned data |
-| `no_record` | The lookup answered: nothing exists (e.g. NXDOMAIN, HTTP 404) |
-| `timeout` | The lookup did not answer in time |
-| `error` / `unavailable` | Resolver/registry/HTTP-level failure |
-
-The same contract applies per provider: a DNS timeout sets
-`intelligence.domains[n].dns.status = "timeout"` and leaves the email and
-authentication blocks untouched. GeoIP not configured yields
-`available = false, reason = "not_configured"`. **An intelligence provider
-failing never destroys the email analysis.**
-
-### Provenance
-
-Every indicator carries its origin, e.g.:
-
-- IP `192.0.2.10` → `source: received_header, location: "received_header[0]"`
-- URL `https://example.test/html-path` → `location: "body.html"`
-
-Received-chain IPs are **candidate IPs only**. Step 4 makes no
-"originating IP" or "attacker IP" claim; attribution reasoning belongs to a
-later phase.
-
-### Configuration (environment variables)
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `DNS_INTELLIGENCE_TIMEOUT_SECONDS` | `3` | Per-query DNS timeout |
-| `DNS_INTELLIGENCE_LIFETIME_SECONDS` | `6` | Total DNS resolution lifetime |
-| `RDAP_INTELLIGENCE_TIMEOUT_SECONDS` | `10` | RDAP request timeout |
-| `INTELLIGENCE_MAX_IPS` / `_DOMAINS` / `_URLS` | `32` / `32` / `64` | Per-analysis enrichment caps |
-| `INTELLIGENCE_PERFORM_DNS` / `INTELLIGENCE_PERFORM_RDAP` | `true` | Provider kill switches |
-| `MAXMIND_DB_PATH` | *(unset)* | GeoLite2-City.mmdb path; **unset = GeoIP disabled** |
-| `MAXMIND_ASN_DB_PATH` | *(unset)* | GeoLite2-ASN.mmdb path (optional) |
-
-### External network access — strict allowlist
-
-Step 4 introduces controlled external lookups. **Only** these outgoing
-requests exist:
-
-1. DNS queries for validated domain/hostname indicators (dnspython);
-2. RDAP queries built exclusively as `<IANA-bootstrap endpoint>/domain/<validated domain>`;
-3. Local MaxMind database file reads (no network when configured).
-
-There is no generic `fetch_url()`; user-supplied URLs never become HTTP
-requests. URLs are parsed, never visited; redirects are never followed
-(`follow_redirects=False`); attachments are never executed. RDAP HTTP 429 is
-honored with its `Retry-After` hint. The IANA bootstrap file is cached
-per process (one fetch per run).
-
-### Privacy considerations
-
-- RDAP evidence stores registrar, dates, nameservers, statuses, and entity
-  **roles** only — registrant names, e-mails, and phone numbers are never
-  copied into evidence;
-- no email content (bodies, subjects, addresses) is logged by the
-  intelligence modules;
-- IP geolocation is approximate infrastructure intelligence — no exact
-  physical-location claim is made;
-- RDAP/DNS/GeoIP data is registration and infrastructure evidence only; it
-  never proves who controls a domain or whether anything is malicious.
-
-### Limitations
-
-- Registered-domain extraction uses a conservative heuristic (common
-  compound suffixes such as `co.uk` are refused rather than guessed); a
-  Public Suffix List library is a deliberate future addition;
-- GeoIP webservice mode is accepted in configuration but not implemented —
-  only local `.mmdb` databases are read;
-- reverse-DNS (PTR) lookups and DNS-based blocklists are out of scope;
-- no caching layer yet (by design — see Step 4 plan §16);
-- candidate IPs are not yet ranked by Received-chain reliability.
-
-### Step 4 tests
-
-153 unit tests in `backend/tests/intelligence/` cover all 24 plan sections
-(extraction, provenance, DNS states, RDAP mocking, GeoIP degradation, schema
-validation, resilience, and security guarantees). All external services are
-faked; the unit suite never touches the network. A small set of controlled
-live tests (only `example.com`/IANA domains, marked `live`) is excluded by
-default and can be run explicitly:
-
-```powershell
-Push-Location backend
-.\.venv\Scripts\python.exe -m pytest tests/intelligence -m live -v
-Pop-Location
+```bash
+docker compose up -d rspamd      # 127.0.0.1:11333 (API), 11334 (UI)
+docker compose stop rspamd       # to stop
 ```
 
-Live tests skip honestly (with the observed reason) when DNS, RDAP, or a
-MaxMind database is unavailable — results are never fabricated.
+While Rspamd is down, `POST /analyze-email` returns a controlled `503
+rspamd_unavailable` (strict mode); degraded mode can be enabled explicitly.
 
-## Step 3 — FastAPI Integration
+### 3. Frontend dashboard
 
-The API composes the two evidence pipelines behind one endpoint:
-
-```text
-Upload (.eml, multipart/form-data)
-    → Step 1 Email Extraction      → EmailEvidence
-    → Step 2 Rspamd Authentication → AuthenticationEvidence
-    → Combined JSON response
+```bash
+cd frontend
+npm install
+npm run dev        # http://localhost:5173, proxies /api to :8000
 ```
 
-The uploaded bytes are passed byte-for-byte to both pipelines; the email is
-never reconstructed, modified, persisted, or executed.
+### 4. Chrome extension
 
-### Run the stack locally
+Load `extension/` via `chrome://extensions` → *Load unpacked*. Gmail
+analysis uses OAuth — create your own Google Cloud OAuth client and put its
+id in `extension/manifest.json` (the checked-in value is an intentional
+`REPLACE_WITH_YOUR_OAUTH_CLIENT_ID` placeholder; the extension reports it as
+unconfigured instead of failing silently). Full setup:
+[extension/README.md](extension/README.md).
 
-```powershell
-# 1. Start Rspamd (first run pulls rspamd/rspamd:latest)
-docker compose up -d rspamd
+### 5. Analyze an email
 
-# 2. Start the API
-Push-Location backend
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-Pop-Location
-
-# 3. Open the interactive API documentation
-#    http://127.0.0.1:8000/docs
+```bash
+curl -s -X POST http://127.0.0.1:8000/analyze-email \
+  -F "upload=@samples/phishing/sample-1.eml" | python -m json.tool
 ```
 
-In `/docs`, use **POST /analyze-email** and upload a `.eml` file. The response
-contains an `email` block (file, message, sender, recipients, body, headers,
-received_chain, mime, urls, attachments, parser_defects), an
-`authentication` block (spf, dkim, dmarc, rspamd), and an `intelligence`
-block (indicators, urls, ips, domains, counts — see Step 4 above).
+Or open the dashboard and drop the file onto the upload zone.
 
-### Endpoints
+## API
 
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
-| `/health` | GET | API process liveness (never contacts Rspamd) |
-| `/health/rspamd` | GET | Rspamd dependency availability (separate concern) |
-| `/analyze-email` | POST | Combined extraction + authentication analysis |
-| `/docs`, `/openapi.json` | GET | Automatic API documentation |
+| `/health` | GET | API liveness (never contacts Rspamd) |
+| `/health/rspamd` | GET | Rspamd dependency availability |
+| `/analyze-email` | POST | Full pipeline: upload → evidence → risk |
+| `/analyses` | GET | Stored (privacy-safe derived) analyses |
+| `/analyses/{id}` | GET | One stored analysis |
+| `/reports/{id}?format=json\|html` | GET | Stored forensic report |
+| `/reports/generate` | POST | Report from a client-held analysis |
+| `/docs` | GET | Interactive OpenAPI documentation |
 
-### Configuration (environment variables, see `.env.example`)
+Controlled errors (never stack traces or content leaks): `400 empty_file`,
+`413 file_too_large` (25 MiB), `415 unsupported_format`, `422
+malformed_email`, `502/503/504` for Rspamd failures. See
+[docs/api.md](docs/api.md).
 
-- `RSPAMD_URL` — default `http://127.0.0.1:11333` (host-side callers). Code
-  inside the Compose network must set `http://rspamd:11333`.
-- `RSPAMD_TIMEOUT_SECONDS` — scan timeout (default 30).
-- `API_CORS_ORIGINS` — comma-separated allowed origins (default: local dev
-  origins only). Never use `*` together with credentials.
-- `API_ENVIRONMENT` — deployment label (default `local`).
+## Risk engine (documented, deterministic)
 
-### Upload limits and errors
+The score is a capped sum of documented point tables
+(`backend/app/ai/risk/scorer.py` docstring is the normative reference):
 
-The single upload limit is **25 MiB** (the Step 1 limit; the API defines no
-second, conflicting limit). Common controlled errors:
+| Evidence | Points |
+| --- | --- |
+| NLP suspicious probability × 30 | max 30 |
+| Technical-ML suspicious probability × 15 | max 15 |
+| *(Fusion adds 0 — it is the weighted mean of the two, counted once)* | — |
+| DMARC failed evaluation | 8 (published policy never scores by itself) |
+| SPF fail / softfail | 6 / 3 |
+| DKIM fail | 5 |
+| Header anomalies (reply-to, return-path, message-id, missing date) | max 15 |
+| URL indicators (IP literals, off-site domains, odd ports) | max 16 |
+| Young linked domain (< 30 d / < 90 d) | 6 / 3 |
+| Text keywords (credential / payment / urgency) | 10 / 5 / 3 |
 
-| HTTP | `error.code` | Meaning |
-| --- | --- | --- |
-| 400 | `empty_file` | The uploaded file is empty |
-| 400 | `invalid_file` / `invalid_email` | The upload could not be processed |
-| 413 | `file_too_large` | The upload exceeds 25 MiB |
-| 415 | `unsupported_format` | Only `.eml` files are accepted |
-| 422 | `malformed_email` | Not a parseable RFC 5322 message |
-| 502 | `rspamd_invalid_response` | Rspamd returned an invalid response |
-| 503 | `rspamd_unavailable` | Rspamd is stopped or unreachable (start it with `docker compose up -d rspamd`) |
-| 504 | `rspamd_timeout` | Rspamd did not answer in time |
-| 500 | `internal_error` | Unexpected server error (no details leaked) |
+Verdicts: `≥ 75 malicious`, `≥ 45 suspicious`, else `benign`; verdict is
+`inconclusive` when neither models nor authentication produced evidence.
+Confidence reflects corroborating sources and drops when evidence is
+missing. Identical inputs always produce identical output. The score is a
+heuristic composite — not a statistically calibrated detector.
 
-Error responses never contain stack traces, raw email content, credentials, or
-internal paths.
+## Models
 
-## Step 2 — Authentication Verification (Rspamd)
+Artifacts are tracked via **Git LFS** and loaded strictly locally:
 
-Step 2 runs Rspamd as a local Dockerized service and converts its scan output
-into normalized authentication evidence:
+- `ai/models/nlp/forentisai_deberta_v3/` — fine-tuned DeBERTa-v3
+  (184M parameters, trained from `microsoft/deberta-v3-base`). Loaded only
+  with a valid `forentisai_model.json` manifest; missing/invalid artifacts
+  produce explicit `model_not_found` states, never fake predictions.
+- `ai/models/technical_model.joblib` — RandomForest with the exact
+  `technical-30-eml-v1` feature contract; contract mismatches are
+  controlled `incompatible_model` states.
 
-```text
-Raw Email (original bytes, never modified or reconstructed)
-    ↓
-Rspamd  (POST /checkv2, Dockerized service)
-    ↓
-SPF / DKIM / DMARC / Rspamd analysis symbols
-    ↓
-AuthenticationEvidence (normalized JSON)
+Retraining scripts and honesty rules: [docs/model_compatibility.md](docs/model_compatibility.md)
+and `ai/training/`.
+
+## Testing
+
+```bash
+cd backend
+python -m pytest            # unit + integration (live tests excluded)
+python -m pytest -m live    # opt-in live tests (need Rspamd / network)
 ```
 
-The two pipelines stay separate and clean:
+The suite covers extraction, authentication normalization (including DMARC
+result-vs-policy regression tests), intelligence, features, models, fusion,
+explainability, the risk engine, API endpoints, security (rate limiting,
+API keys), correlation, persistence, and reports. Live tests skip honestly
+when their dependencies are unavailable.
 
-- original bytes → mail-parser → `EmailEvidence` (Step 1)
-- original bytes → Rspamd → `AuthenticationEvidence` (Step 2)
+## Security & privacy boundaries
 
-### Authentication PASS is not "safe"
+- Original email bytes are analyzed in memory and never persisted; only
+  derived, privacy-safe metadata is stored.
+- No email content is logged; error responses never leak internals.
+- Outbound requests are limited to DNS, RDAP (IANA bootstrap), and optional
+  local GeoIP reads. User-supplied URLs are parsed, never fetched.
+- API keys (fail-closed when configured), per-identity rate limiting,
+  environment-based secrets. Details: [docs/security.md](docs/security.md).
 
-SPF/DKIM/DMARC results are **evidence, not a verdict**. A message with passing
-authentication can still be malicious: legitimate accounts get compromised and
-phishing is regularly sent from correctly authenticated infrastructure. Step 2
-never converts authentication results into a safety statement, a risk score, or
-a threat verdict — those belong to later phases.
+## Documentation
 
-### Start and stop Rspamd (local Docker)
+- [docs/architecture.md](docs/architecture.md) — modules and data flow
+- [docs/api.md](docs/api.md) — endpoints, schemas, errors
+- [docs/deployment.md](docs/deployment.md) — configuration and production checklist
+- [docs/security.md](docs/security.md) — threat-model-aligned boundaries
+- [docs/model_compatibility.md](docs/model_compatibility.md) — model artifacts & contracts
 
-```powershell
-# Start (first run pulls rspamd/rspamd:latest)
-docker compose up -d rspamd
+## License
 
-# Verify it is running
-docker ps
-
-# Stop
-docker compose stop rspamd
-```
-
-Both published ports are bound to host loopback only:
-`127.0.0.1:11333` (normal worker `/checkv2` scanning API) and
-`127.0.0.1:11334` (controller web interface). Inside the Compose network the
-service is reachable as `rspamd`.
-
-Configuration uses environment variables (see `.env.example`):
-
-- `RSPAMD_URL` — default `http://rspamd:11333` for containerized callers; use
-  `http://127.0.0.1:11333` for host-side processes.
-- `RSPAMD_TIMEOUT_SECONDS` — scan request timeout (default 30).
-
-### Step 2 tests
-
-Unit tests mock all HTTP interaction; two integration tests run against the
-live container and skip automatically when Rspamd is not running.
-
-```powershell
-Push-Location backend
-.\.venv\Scripts\python.exe -m pytest -v
-Pop-Location
-```
-
-## Step 1 — Email Data Extraction
-
-This step converts a local `.eml` file into derived, normalized ForentisAI JSON:
-
-```text
-.eml → validation → SHA-256 → mail-parser/MIME parsing →
-header, body, attachment, and URL extraction → normalized JSON
-```
-
-The original file bytes are never modified. The SHA-256 and file size are
-calculated before parsing, while the normalized `EmailEvidence` object remains
-a separate derived representation.
-
-### Setup (PowerShell)
-
-Python 3.11 or later is required. Python 3.13.5 was used to verify this
-workspace.
-
-```powershell
-py -3.13 -m venv backend/.venv
-.\backend\.venv\Scripts\Activate.ps1
-python -m pip install -r backend/requirements.txt
-```
-
-### Run automated tests
-
-```powershell
-Push-Location backend
-.\.venv\Scripts\python.exe -m pytest
-Pop-Location
-```
-
-### Run a safe manual extraction summary
-
-The command deliberately prints only filename, evidence hash, address fields,
-subject/date, and counts. It does not print an email body or complete headers.
-
-```powershell
-Push-Location backend
-.\.venv\Scripts\python.exe -m app.extractor.email_parser ..\samples\safe\step1_synthetic.eml
-Pop-Location
-```
-
-### File-format support
-
-`.eml` is supported. The installed `mail-parser 4.6.4` package has an optional
-Outlook `.msg` conversion path, but it requires the uninstalled
-`mail-parser[outlook]` / `extract-msg` backend (or its deprecated `msgconvert`
-fallback). Therefore `.msg` files are explicitly rejected in Step 1 instead of
-being parsed unreliably.
-
-### Step 1 safety boundary
-
-The extractor never executes attachments, visits URLs, or sends content to an
-external service. Authentication headers are only preserved as evidence; no
-SPF, DKIM, DMARC, ARC, threat-intelligence, AI, scoring, or reporting work is
-performed in this phase.
+Released under the [MIT License](LICENSE).

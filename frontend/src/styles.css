@@ -81,6 +81,65 @@ h3 { font-size: 13px; margin: 12px 0 6px; }
 .fail { color: var(--malicious); }
 .error-text { color: var(--malicious); }
 
+/* Verdict-band aliases shared by the dashboard stats and risk displays. */
+.score-benign { color: var(--benign); }
+.score-suspicious { color: var(--suspicious); }
+.score-malicious { color: var(--malicious); }
+.score-muted { color: var(--muted); }
+
+/* Dashboard: aggregate strip + dependency status line. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin: 4px 0 14px;
+}
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stat-value { font-size: 26px; font-weight: 700; line-height: 1.1; }
+.stat-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.health-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 16px;
+}
+.health-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.health-ok { background: var(--benign); }
+.health-down { background: var(--malicious); }
+.health-unknown { background: var(--muted); }
+.table-title { margin-top: 4px; }
+
+/* Analysis page: .eml drop zone. */
+.dropzone {
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 26px 18px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.dropzone:hover, .dropzone:focus-visible { border-color: var(--accent); outline: none; }
+.dropzone.dragging { border-color: var(--accent); background: var(--panel-2); }
+.dropzone-title { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+.dropzone .hint { margin: 0; }
+.upload-actions { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; }
+
 .plain { margin: 4px 0; padding-left: 18px; }
 .plain li { padding: 2px 0; word-break: break-word; }
 

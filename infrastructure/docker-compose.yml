@@ -4,7 +4,6 @@
 # defined ONCE in the repository-root docker-compose.yml. This directory
 # holds deployment-specific artifacts only:
 #
-#   deployment/   hosted-platform configurations (render.yaml, vercel.json)
 #   rspamd/       optional custom Rspamd image (the stack uses the official
 #                 image; see the Dockerfile for when to build a custom one)
 #

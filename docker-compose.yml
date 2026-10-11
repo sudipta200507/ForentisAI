@@ -78,7 +78,7 @@ services:
       API_ENVIRONMENT: ${API_ENVIRONMENT:-local}
       FORENTISAI_API_KEYS: ${FORENTISAI_API_KEYS:-}
       API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
-      API_RATE_LIMIT_REQUESTS: ${API_RATE_LIMIT_REQUESTS:-60}
+      API_RATE_LIMIT_REQUESTS: ${API_RATE_LIMIT_REQUESTS:-600}
       API_RATE_LIMIT_WINDOW_SECONDS: ${API_RATE_LIMIT_WINDOW_SECONDS:-60}
       # AI model artifact locations (mounted read-only below).
       AI_ENABLED: ${AI_ENABLED:-true}
